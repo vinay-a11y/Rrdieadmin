@@ -54,6 +54,9 @@ export default function Invoice() {
 
   const scanTimeoutRef = useRef(null)
   const location = useLocation()
+  const [manualAmount, setManualAmount] = useState(0)
+const [manualLabel, setManualLabel] = useState("Additional Charge")
+
 
   useEffect(() => {
     const token = localStorage.getItem("token")
@@ -348,27 +351,36 @@ export default function Invoice() {
     setLineItems(lineItems.filter((_, i) => i !== index))
   }
 
-  const calculateTotals = () => {
-    const subtotal = lineItems.reduce((sum, item) => sum + item.total, 0)
-    const gstAmount = lineItems.reduce((sum, item) => {
-      const itemGst = (item.total * item.gst_rate) / 100
-      return sum + itemGst
-    }, 0)
-    const total = subtotal + gstAmount - discount
-    return { subtotal, gstAmount, total }
-  }
+ const calculateTotals = () => {
+  const itemsSubtotal = lineItems.reduce((sum, item) => sum + item.total, 0)
 
-  const resetForm = () => {
-    setCustomerPhone("")
-    setCustomerName("")
-    setCustomerEmail("")
-    setCustomerAddress("")
-    setCustomerId(null)
-    setLineItems([])
-    setDiscount(0)
-    setPaymentStatus("pending")
-    setSkuInput("") // Clear SKU input on reset
-  }
+  const gstAmount = lineItems.reduce((sum, item) => {
+    const itemGst = (item.total * item.gst_rate) / 100
+    return sum + itemGst
+  }, 0)
+
+  const extraAmount = Number(manualAmount || 0)
+
+  const subtotal = itemsSubtotal + extraAmount
+  const total = subtotal + gstAmount - discount
+
+  return { subtotal, gstAmount, total }
+}
+
+const resetForm = () => {
+  setCustomerPhone("")
+  setCustomerName("")
+  setCustomerEmail("")
+  setCustomerAddress("")
+  setCustomerId(null)
+  setLineItems([])
+  setDiscount(0)
+  setPaymentStatus("pending")
+  setSkuInput("")
+  setManualAmount(0)
+  setManualLabel("Additional Charge")
+}
+
 
   const handleCreateInvoice = async () => {
     if (!customerName || !customerEmail || lineItems.length === 0) {
@@ -397,6 +409,9 @@ export default function Invoice() {
         gst_amount: gstAmount,
         discount: Number(discount),
         payment_status: paymentStatus,
+        extra_amount: manualAmount,
+extra_label: manualLabel,
+
       }
 
       await axios.post(`${API}/invoices`, payload)
@@ -500,8 +515,8 @@ export default function Invoice() {
             </thead>
             <tbody>
               ${invoice.items
-                .map(
-                  (item, index) => `
+        .map(
+          (item, index) => `
                 <tr>
                   <td>${index + 1}</td>
                   <td>${item.product_name}</td>
@@ -511,8 +526,8 @@ export default function Invoice() {
                   <td class="text-right">₹${item.total.toFixed(2)}</td>
                 </tr>
               `,
-                )
-                .join("")}
+        )
+        .join("")}
             </tbody>
           </table>
 
@@ -763,88 +778,73 @@ export default function Invoice() {
                 </div>
               )}
 
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {lineItems.map((item, index) => (
                   <div
                     key={index}
-                    className="border rounded-lg p-3 space-y-3 md:p-4 md:space-y-0 md:flex md:gap-4 md:items-end md:border-0 md:border-b md:rounded-none md:pb-4"
+                    className="flex items-center gap-2 border rounded-md px-2 py-1"
                   >
-                    <div className="flex-1 space-y-2">
-                      <Label className="text-sm font-medium">Product</Label>
+                    {/* SERIAL NO */}
+                    <div className="w-6 text-center text-xs font-semibold text-muted-foreground">
+                      {index + 1}
+                    </div>
+
+                    {/* PRODUCT */}
+                    <div className="flex-1">
                       <Select
                         value={String(item.product_id)}
                         onValueChange={(v) => updateLineItem(index, "product_id", v)}
                       >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select product" />
+                        <SelectTrigger className="h-9 bg-black text-white text-xs border-gray-700">
+                          <SelectValue placeholder="Product" />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className="bg-black text-white border-gray-700">
                           {products.map((p) => (
-                            <SelectItem key={p.id} value={String(p.id)}>
-                              {p.name} - ₹{p.selling_price}
+                            <SelectItem
+                              key={p.id}
+                              value={String(p.id)}
+                              className="text-xs focus:bg-gray-800"
+                            >
+                              {p.name} – ₹{p.selling_price}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 md:contents">
-                      <div className="space-y-2 md:w-20">
-                        <Label className="text-sm font-medium">Qty</Label>
-                        <Input
-                          type="number"
-                          value={item.quantity}
-                          onChange={(e) => updateLineItem(index, "quantity", Number(e.target.value))}
-                          min="1"
-                          className="text-sm"
-                        />
-                      </div>
-                      <div className="space-y-2 md:w-28">
-                        <Label className="text-sm font-medium">Price</Label>
-                        <Input
-                          type="number"
-                          value={item.price}
-                          onChange={(e) => updateLineItem(index, "price", Number(e.target.value))}
-                          className="text-sm"
-                        />
-                      </div>
-                    </div>
+                    {/* QTY */}
+                    <Input
+                      type="number"
+                      min="1"
+                      value={item.quantity}
+                      onChange={(e) =>
+                        updateLineItem(index, "quantity", Number(e.target.value))
+                      }
+                      className="h-9 w-14 text-xs px-2 text-center"
+                    />
 
-                    <div className="grid grid-cols-2 gap-2 md:contents">
-                      <div className="space-y-2 md:w-20">
-                        <Label className="text-sm font-medium">GST %</Label>
-                        <Select
-                          value={item.gst_rate.toString()}
-                          onValueChange={(v) => updateLineItem(index, "gst_rate", Number(v))}
-                        >
-                          <SelectTrigger className="text-sm">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="5">5%</SelectItem>
-                            <SelectItem value="12">12%</SelectItem>
-                            <SelectItem value="18">18%</SelectItem>
-                            <SelectItem value="28">28%</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2 md:w-28">
-                        <Label className="text-sm font-medium">Total</Label>
-                        <Input value={`₹${item.total.toFixed(2)}`} disabled className="text-sm font-semibold" />
-                      </div>
-                    </div>
+                    {/* TOTAL */}
+                    <Input
+                      disabled
+                      value={`₹${item.total.toFixed(0)}`}
+                      className="h-9 w-20 text-xs px-2 font-semibold text-center"
+                    />
 
-                    <div className="flex justify-end md:block md:self-end">
-                      <Button size="sm" variant="destructive" onClick={() => removeLineItem(index)}>
-                        <Trash2 className="w-4 h-4 md:mr-0" />
-                        <span className="ml-2 md:hidden">Remove</span>
-                      </Button>
-                    </div>
+                    {/* REMOVE */}
+                    <Button
+                      size="icon"
+                      variant="destructive"
+                      className="h-9 w-9"
+                      onClick={() => removeLineItem(index)}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
                 ))}
+
                 {lineItems.length === 0 && (
-                  <div className="text-center py-8 text-muted-foreground text-sm">
-                    No items added. Scan or add items to start.
+                  <div className="text-center py-6 text-xs text-muted-foreground">
+                    No items added
                   </div>
                 )}
               </div>
@@ -863,21 +863,58 @@ export default function Invoice() {
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
+  <Label className="text-sm">Additional Amount</Label>
+  <Input
+    type="number"
+    min="0"
+    placeholder="Enter amount"
+    value={manualAmount}
+    onChange={(e) => setManualAmount(Number(e.target.value))}
+  />
+</div>
+
+<div>
+  <Label className="text-sm">Description</Label>
+  <Input
+    placeholder="Eg: Labour / Fitting / Service"
+    value={manualLabel}
+    onChange={(e) => setManualLabel(e.target.value)}
+  />
+</div>
+ 
+                <div>
                   <Label className="text-sm">Discount (₹)</Label>
                   <Input type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} min="0" />
                 </div>
                 <div>
                   <Label className="text-sm">Payment Status</Label>
                   <Select value={paymentStatus} onValueChange={setPaymentStatus}>
-                    <SelectTrigger>
-                      <SelectValue />
+                    <SelectTrigger className="">
+                      <SelectValue placeholder="Select status" />
                     </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="paid">Paid</SelectItem>
-                      <SelectItem value="overdue">Overdue</SelectItem>
+
+                    <SelectContent className="bg-black text-white border-gray-700">
+                      <SelectItem
+                        value="pending"
+                        className="focus:bg-gray-800 focus:text-white"
+                      >
+                        Pending
+                      </SelectItem>
+                      <SelectItem
+                        value="paid"
+                        className="focus:bg-gray-800 focus:text-white"
+                      >
+                        Paid
+                      </SelectItem>
+                      <SelectItem
+                        value="overdue"
+                        className="focus:bg-gray-800 focus:text-white"
+                      >
+                        Overdue
+                      </SelectItem>
                     </SelectContent>
                   </Select>
+
                 </div>
               </div>
 
@@ -886,6 +923,15 @@ export default function Invoice() {
                   <span>Subtotal:</span>
                   <span className="font-medium text-foreground">₹{subtotal.toFixed(2)}</span>
                 </div>
+                {manualAmount > 0 && (
+  <div className="flex justify-between text-sm md:text-base text-muted-foreground">
+    <span>{manualLabel}:</span>
+    <span className="font-medium text-foreground">
+      ₹{manualAmount.toFixed(2)}
+    </span>
+  </div>
+)}
+
                 <div className="flex justify-between text-sm md:text-base text-muted-foreground">
                   <span>GST Amount:</span>
                   <span className="font-medium text-foreground">₹{gstAmount.toFixed(2)}</span>
@@ -935,14 +981,22 @@ export default function Invoice() {
                 setStatusFilter(v)
               }}
             >
-              <SelectTrigger>
-                <SelectValue placeholder="Filter by Status" />
+              <SelectTrigger className="bg-black text-white border-gray-700">
+                <SelectValue placeholder="Status" />
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="paid">Paid</SelectItem>
-                <SelectItem value="overdue">Overdue</SelectItem>
-                <SelectItem value="ending">Ending</SelectItem>
-                <SelectItem value="cancelled">Cancelled</SelectItem>
+              <SelectContent className="bg-black text-white border-gray-700">
+                <SelectItem value="paid" className="focus:bg-gray-800">
+                  Paid
+                </SelectItem>
+                <SelectItem value="overdue" className="focus:bg-gray-800">
+                  Overdue
+                </SelectItem>
+                <SelectItem value="Pending" className="focus:bg-gray-800">
+                  Pending
+                </SelectItem>
+                <SelectItem value="cancelled" className="focus:bg-gray-800">
+                  Cancelled
+                </SelectItem>
               </SelectContent>
             </Select>
 
@@ -953,12 +1007,16 @@ export default function Invoice() {
                 setRangeFilter(v)
               }}
             >
-              <SelectTrigger>
+              <SelectTrigger className="bg-black text-white border-gray-700">
                 <SelectValue placeholder="Date Range" />
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="last10">Last 10 Days</SelectItem>
-                <SelectItem value="last30">Last 30 Days</SelectItem>
+              <SelectContent className="bg-black text-white border-gray-700">
+                <SelectItem value="last10" className="focus:bg-gray-800">
+                  Last 10 Days
+                </SelectItem>
+                <SelectItem value="last30" className="focus:bg-gray-800">
+                  Last 30 Days
+                </SelectItem>
               </SelectContent>
             </Select>
 
@@ -970,8 +1028,10 @@ export default function Invoice() {
                 setPage(1)
                 setMonthFilter(e.target.value)
               }}
-              className="col-span-1 sm:col-span-2 md:col-span-1"
+              className="bg-black text-white border-gray-700
+             col-span-1 sm:col-span-2 md:col-span-1"
             />
+
           </div>
 
           <Card>
@@ -1011,20 +1071,32 @@ export default function Invoice() {
 
                                 // update local state immediately (no crash)
                                 setInvoices((prev) =>
-                                  prev.map((i) => (i.id === inv.id ? { ...i, payment_status: v } : i)),
+                                  prev.map((i) =>
+                                    i.id === inv.id ? { ...i, payment_status: v } : i
+                                  )
                                 )
                               }}
                             >
-                              <SelectTrigger className="w-32">
-                                <SelectValue />
+                              <SelectTrigger className="w-32 bg-black text-white border-gray-700">
+                                <SelectValue placeholder="Status" />
                               </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="pending">Pending</SelectItem>
-                                <SelectItem value="paid">Paid</SelectItem>
-                                <SelectItem value="overdue">Overdue</SelectItem>
-                                <SelectItem value="cancelled">Cancelled</SelectItem>
+
+                              <SelectContent className="bg-black text-white border-gray-700">
+                                <SelectItem value="pending" className="focus:bg-gray-800">
+                                  Pending
+                                </SelectItem>
+                                <SelectItem value="paid" className="focus:bg-gray-800">
+                                  Paid
+                                </SelectItem>
+                                <SelectItem value="overdue" className="focus:bg-gray-800">
+                                  Overdue
+                                </SelectItem>
+                                <SelectItem value="cancelled" className="focus:bg-gray-800">
+                                  Cancelled
+                                </SelectItem>
                               </SelectContent>
                             </Select>
+
                           </td>
 
                           <td className="p-2 text-right">
@@ -1073,20 +1145,32 @@ export default function Invoice() {
                             onValueChange={(v) => {
                               updateInvoiceStatus(inv.id, v)
                               setInvoices((prev) =>
-                                prev.map((i) => (i.id === inv.id ? { ...i, payment_status: v } : i)),
+                                prev.map((i) =>
+                                  i.id === inv.id ? { ...i, payment_status: v } : i
+                                )
                               )
                             }}
                           >
-                            <SelectTrigger className="h-9">
-                              <SelectValue />
+                            <SelectTrigger>
+                              <SelectValue placeholder="Status" />
                             </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="pending">Pending</SelectItem>
-                              <SelectItem value="paid">Paid</SelectItem>
-                              <SelectItem value="overdue">Overdue</SelectItem>
-                              <SelectItem value="cancelled">Cancelled</SelectItem>
+
+                            <SelectContent className="bg-black text-white border-gray-700">
+                              <SelectItem value="pending" className="focus:bg-gray-800">
+                                Pending
+                              </SelectItem>
+                              <SelectItem value="paid" className="focus:bg-gray-800">
+                                Paid
+                              </SelectItem>
+                              <SelectItem value="overdue" className="focus:bg-gray-800">
+                                Overdue
+                              </SelectItem>
+                              <SelectItem value="cancelled" className="focus:bg-gray-800">
+                                Cancelled
+                              </SelectItem>
                             </SelectContent>
                           </Select>
+
                         </div>
 
                         <div className="flex gap-2 pt-2 border-t">

@@ -33,7 +33,7 @@ const Layout = () => {
     <div className="flex h-screen bg-background flex-col md:flex-row">
       {/* ================= MOBILE TOP NAV ================= */}
       <header className="md:hidden flex items-center justify-between px-4 py-3 border-b bg-paper">
-        <h1 className="text-lg font-bold text-primary">InvenTrack</h1>
+        <h1 className="text-lg font-bold text-primary">Inven</h1>
 
         <nav className="flex gap-4">
           {navItems.map((item) => {

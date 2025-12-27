@@ -26,6 +26,10 @@ const Products = () => {
   const [search, setSearch] = useState("")
   const [categoryFilter, setCategoryFilter] = useState("all")
   const [priceSort, setPriceSort] = useState("none")
+  const [uploading, setUploading] = useState(false)
+const [imagePreview, setImagePreview] = useState("")
+const [imagePreviews, setImagePreviews] = useState([])
+
 
   const [formData, setFormData] = useState({
     name: "",
@@ -38,6 +42,8 @@ const Products = () => {
     min_stock: "",
     sku: "",
     image_url: "",
+      images: [],
+
   })
 
   useEffect(() => {
@@ -59,6 +65,50 @@ const Products = () => {
       toast.error("Failed to load products")
     }
   }
+
+  const handleImageUpload = async (file) => {
+  if (!file) return
+
+  const token = localStorage.getItem("token")
+  const formDataUpload = new FormData()
+  formDataUpload.append("file", file)
+
+  try {
+    setUploading(true)
+
+    const res = await axios.post(
+      `${API}/upload/product-image`,
+      formDataUpload,
+      {
+        headers: {
+          "Content-Type": "multipart/form-data",
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    )
+
+   setFormData(prev => {
+  const newImages = [...prev.images, res.data.url].slice(0, 5)
+
+  return {
+    ...prev,
+    images: newImages,
+    image_url: newImages[0], // first image = main image
+  }
+})
+
+setImagePreviews(prev => [...prev, res.data.url].slice(0, 5))
+
+
+    setImagePreview(res.data.url)
+    toast.success("Image uploaded")
+
+  } catch (err) {
+    toast.error("Image upload failed")
+  } finally {
+    setUploading(false)
+  }
+}
 
   const fetchCategories = async () => {
     try {
@@ -111,6 +161,8 @@ const Products = () => {
       min_stock: Number(formData.min_stock),
       sku: formData.sku,
       image_url: formData.image_url,
+        images: formData.images,
+
     }
 
     if (role === "admin") {
@@ -134,24 +186,33 @@ const Products = () => {
     }
   }
 
-  const handleEdit = (product) => {
-    setEditingProduct(product)
+const handleEdit = (product) => {
+  setEditingProduct(product)
 
-    setFormData({
-      name: product.name || "",
-      description: product.description || "",
-      category_id: product.category_id || "",
-      selling_price: product.selling_price?.toString() || "",
-      min_selling_price: product.min_selling_price?.toString() || "",
-      stock: product.stock?.toString() || "",
-      min_stock: product.min_stock?.toString() || "",
-      sku: product.sku || "",
-      image_url: product.image_url || "",
-      cost_price: role === "admin" ? product.cost_price?.toString() || "" : "",
-    })
+  setFormData({
+    name: product.name || "",
+    description: product.description || "",
+    category_id: product.category_id || "",
+    selling_price: product.selling_price?.toString() || "",
+    min_selling_price: product.min_selling_price?.toString() || "",
+    stock: product.stock?.toString() || "",
+    min_stock: product.min_stock?.toString() || "",
+    sku: product.sku || "",
+    image_url: product.image_url || "",
+    cost_price: role === "admin" ? product.cost_price?.toString() || "" : "",
+  })
 
-    setOpen(true)
-  }
+  // 👉 ADD THIS LINE
+setFormData({
+  ...formData,
+  image_url: product.image_url || "",
+  images: product.images || [],
+})
+
+setImagePreviews(product.images || [])
+
+  setOpen(true)
+}
 
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this product?")) return
@@ -165,22 +226,23 @@ const Products = () => {
     }
   }
 
-  const resetForm = () => {
-    setEditingProduct(null)
-    setFormData({
-      name: "",
-      description: "",
-      category_id: "",
-      cost_price: "",
-      min_selling_price: "",
-      selling_price: "",
-      stock: "",
-      min_stock: "",
-      sku: "",
-      image_url: "",
-    })
-  }
-  
+const resetForm = () => {
+  setEditingProduct(null)
+  setImagePreview("")
+  setFormData({
+    name: "",
+    description: "",
+    category_id: "",
+    cost_price: "",
+    min_selling_price: "",
+    selling_price: "",
+    stock: "",
+    min_stock: "",
+    sku: "",
+    image_url: "",
+  })
+}
+
   return (
     <div className="p-6 space-y-6">
       {/* HEADER */}
@@ -253,6 +315,8 @@ const Products = () => {
     setFormData({ ...formData, category_id: v })
   }
 >
+ 
+
   {/* 🔹 KEEP TRIGGER DEFAULT */}
   <SelectTrigger>
     <SelectValue placeholder="Select category" />
@@ -273,23 +337,62 @@ const Products = () => {
 </Select>
 
                 </div>
+                 {/* PRODUCT IMAGE */}
+<div className="space-y-2">
+  <Label>Product Image</Label>
+
+  <div className="flex gap-3 items-center">
+    {/* FILE PICKER */}
+    <Input
+  type="file"
+  accept="image/*"
+  disabled={uploading}
+  onChange={(e) => handleImageUpload(e.target.files[0])}
+/>
+
+
+    {/* CAMERA (MOBILE SUPPORT) */}
+    <Input
+  type="file"
+  accept="image/*"
+  disabled={uploading}
+  onChange={(e) => handleImageUpload(e.target.files[0])}
+/>
+
+  </div>
+
+  {uploading && (
+    <p className="text-sm text-muted-foreground">Uploading image…</p>
+  )}
+
+<div className="flex gap-2 flex-wrap">
+  {imagePreviews.map((img, index) => (
+    <img
+      key={index}
+      src={img}
+      className="w-24 h-24 object-cover rounded border"
+    />
+  ))}
+</div>
+
+</div>
 
                 {/* PRICING */}
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Cost Price</Label>
-                    <Input
-                      type="number"
-                      value={formData.cost_price}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          cost_price: e.target.value,
-                        })
-                      }
-                      required
-                    />
-                  </div>
+                {role === "admin" && (
+  <div>
+    <Label>Cost Price</Label>
+    <Input
+      type="number"
+      value={formData.cost_price}
+      onChange={(e) =>
+        setFormData({ ...formData, cost_price: e.target.value })
+      }
+      required
+    />
+  </div>
+)}
+
 
                   <div>
                     <Label>Minimum Selling Price</Label>
@@ -355,9 +458,10 @@ const Products = () => {
                   </div>
                 </div>
 
-                <Button type="submit" className="w-full">
-                  {editingProduct ? "Update Product" : "Create Product"}
-                </Button>
+              <Button type="submit" className="w-full" disabled={uploading}>
+  {editingProduct ? "Update Product" : "Create Product"}
+</Button>
+
               </form>
             </DialogContent>
           </Dialog>
@@ -449,6 +553,8 @@ const Products = () => {
                 <th className="p-2 text-left">#</th>
                 <th className="p-2 text-left">Code</th>
                 <th className="p-2 text-left">Name</th>
+                <th className="p-2 text-left">Image</th>
+
                 <th className="p-2 text-left">Category</th>
                 <th className="p-2 text-left">SKU</th>
                 <th className="p-2 text-left">QR</th>
@@ -469,6 +575,17 @@ const Products = () => {
                   <td className="p-2">{i + 1}</td>
                   <td className="p-2 font-mono text-sm">{p.product_code}</td>
                   <td className="p-2 font-medium">{p.name}</td>
+                    <td className="p-2">
+  {p.image_url ? (
+    <img
+      src={p.image_url}
+      alt={p.name}
+      className="w-12 h-12 rounded object-cover border"
+    />
+  ) : (
+    <span className="text-muted-foreground text-sm">No image</span>
+  )}
+</td>
                   <td className="p-2">{p.category_name}</td>
                   <td className="p-2 font-mono text-sm">{p.sku}</td>
                   <td className="p-2">
@@ -511,6 +628,8 @@ const Products = () => {
   ) : (
     <span className="text-muted-foreground text-sm">N/A</span>
   )}
+
+
 </td>
 
                   {role === "admin" && <td className="p-2">₹{p.cost_price}</td>}
