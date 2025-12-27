@@ -59,7 +59,6 @@ export default function Dashboard() {
   const [inventoryMove, setInventoryMove] = useState([])
   const [lowStock, setLowStock] = useState([])
   const [activity, setActivity] = useState([])
-
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -150,7 +149,7 @@ export default function Dashboard() {
         <StatCard title="Low Stock" value={stats.low_stock_items} icon={AlertTriangle} />
       </div>
 
-      {/* TODAY AT A GLANCE (ONLY TODAY) */}
+      {/* TODAY AT A GLANCE */}
       {filter === "today" && today && (
         <Card>
           <CardHeader>
@@ -165,7 +164,7 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {/* SALES + HOURLY */}
+      {/* SALES TREND + SECONDARY GRAPH */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* SALES TREND */}
         <Card>
@@ -181,31 +180,46 @@ export default function Dashboard() {
                 <Tooltip content={<SalesTooltip />} />
                 <Line dataKey="total" stroke="#6366f1" strokeWidth={3} />
                 <Line dataKey="paid" stroke="#22c55e" strokeWidth={2} />
-                <Line dataKey="pending" stroke="#f97316" strokeWidth={2} />
-                <Line dataKey="overdue" stroke="#ef4444" strokeWidth={2} />
+                <Line dataKey="pending" stroke="#f97316" strokeDasharray="5 5" />
+                <Line dataKey="overdue" stroke="#ef4444" strokeDasharray="5 5" />
               </LineChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
 
-        {/* HOURLY SALES (TODAY ONLY) */}
-        {filter === "today" && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Hourly Sales (Today)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
+        {/* CONDITIONAL BAR GRAPH */}
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {filter === "today"
+                ? "Hourly Sales (Today)"
+                : filter === "last_10_days"
+                ? "Last 10 Days Sales"
+                : filter === "last_30_days"
+                ? "Last 30 Days Sales"
+                : "Sales Distribution"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              {filter === "today" ? (
                 <BarChart data={hourlySales}>
                   <XAxis dataKey="label" />
                   <YAxis />
                   <Tooltip />
                   <Bar dataKey="total" fill="#22c55e" radius={[6, 6, 0, 0]} />
                 </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        )}
+              ) : (
+                <BarChart data={salesData}>
+                  <XAxis dataKey="name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="total" fill="#6366f1" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              )}
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
       </div>
 
       {/* OTHER CHARTS */}

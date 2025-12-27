@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import axios from "axios"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -34,20 +34,25 @@ export default function Inventory() {
   const [products, setProducts] = useState([])
   const [transactions, setTransactions] = useState([])
 
-  const [productId, setProductId] = useState("")
+  // 🔍 Product auto-complete
+  const [productSearch, setProductSearch] = useState("")
+  const [selectedProduct, setSelectedProduct] = useState(null)
+  const [showSuggestions, setShowSuggestions] = useState(false)
+
   const [quantity, setQuantity] = useState("")
   const [reason, setReason] = useState("")
   const [loading, setLoading] = useState(false)
 
+  // History filters
   const [searchTerm, setSearchTerm] = useState("")
   const [filterType, setFilterType] = useState("all")
 
-  // ✅ PAGINATION STATE
+  // Pagination
   const [page, setPage] = useState(1)
-  const [limit] = useState(30)
+  const limit = 30
   const [total, setTotal] = useState(0)
 
-  const token = localStorage.getItem("access_token")
+  const searchRef = useRef(null)
 
   // ================= FETCH PRODUCTS =================
   useEffect(() => {
@@ -57,46 +62,61 @@ export default function Inventory() {
   const fetchProducts = async () => {
     try {
       const res = await axios.get(`${API}/products/list`)
-      setProducts(res.data)
+      setProducts(res.data || [])
     } catch {
       toast.error("Failed to load products")
     }
   }
 
-  // ================= FETCH TRANSACTIONS =================
+  // ================= CLICK OUTSIDE =================
   useEffect(() => {
-    if (activeTab === "history") {
-      fetchTransactions()
+    const handler = (e) => {
+      if (searchRef.current && !searchRef.current.contains(e.target)) {
+        setShowSuggestions(false)
+      }
     }
-  }, [activeTab, page, filterType])
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [])
+
+  // ================= FILTER PRODUCTS =================
+  const filteredProducts = products.filter((p) => {
+    const q = productSearch.toLowerCase()
+    return (
+      p.name.toLowerCase().includes(q) ||
+      p.sku.toLowerCase().includes(q) ||
+      p.product_code.toLowerCase().includes(q)
+    )
+  })
+
+  const selectProduct = (p) => {
+    setSelectedProduct(p)
+    setProductSearch(`${p.name} (${p.sku})`)
+    setShowSuggestions(false)
+  }
+
+  // ================= FETCH TRANSACTIONS =================
+ useEffect(() => {
+  if (activeTab === "history") fetchTransactions()
+}, [activeTab, page, filterType, searchTerm])
 
   const fetchTransactions = async () => {
     try {
       setLoading(true)
 
-      const params = {
-        page,
-        limit,
-      }
+      const params = { page, limit }
+      if (filterType !== "all") params.type = filterType
 
-      if (filterType !== "all") {
-        params.type = filterType
-      }
-
-      const res = await axios.get(`${API}/inventory/transactions`, {
-        params,
-      })
-
+      const res = await axios.get(`${API}/inventory/transactions`, { params })
       let data = res.data.data || []
 
-      // 🔍 CLIENT SEARCH (on paginated data)
       if (searchTerm) {
-        const search = searchTerm.toLowerCase()
+        const s = searchTerm.toLowerCase()
         data = data.filter(
           (t) =>
-            t.product_name.toLowerCase().includes(search) ||
-            t.product_code.toLowerCase().includes(search) ||
-            t.reason?.toLowerCase().includes(search)
+            t.product_name.toLowerCase().includes(s) ||
+            t.product_code.toLowerCase().includes(s) ||
+            t.reason?.toLowerCase().includes(s)
         )
       }
 
@@ -109,65 +129,52 @@ export default function Inventory() {
     }
   }
 
-  // ================= FORM HANDLERS =================
+  // ================= SUBMIT =================
   const resetForm = () => {
-    setProductId("")
+    setSelectedProduct(null)
+    setProductSearch("")
     setQuantity("")
     setReason("")
   }
 
   const submitInward = async () => {
-    if (!productId || !quantity) {
+    if (!selectedProduct || !quantity) {
       toast.error("Please fill all required fields")
       return
     }
 
-    try {
-      await axios.post(`${API}/inventory/material-inward`, {
-        product_id: productId,
-        quantity: Number(quantity),
-      })
+    await axios.post(`${API}/inventory/material-inward`, {
+      product_id: selectedProduct.id,
+      quantity: Number(quantity),
+    })
 
-      toast.success("Material inward added successfully")
-      resetForm()
-      fetchProducts()
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || "Inward operation failed")
-    }
+    toast.success("Material inward added successfully")
+    resetForm()
+    fetchProducts()
   }
 
   const submitOutward = async () => {
-    if (!productId || !quantity || !reason) {
+    if (!selectedProduct || !quantity || !reason) {
       toast.error("Please fill all required fields")
       return
     }
 
-    try {
-      await axios.post(`${API}/inventory/material-outward`, {
-        product_id: productId,
-        quantity: Number(quantity),
-        reason,
-      })
+    await axios.post(`${API}/inventory/material-outward`, {
+      product_id: selectedProduct.id,
+      quantity: Number(quantity),
+      reason,
+    })
 
-      toast.success("Material outward added successfully")
-      resetForm()
-      fetchProducts()
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || "Outward operation failed")
-    }
+    toast.success("Material outward added successfully")
+    resetForm()
+    fetchProducts()
   }
 
-  const selectedProduct = products.find((p) => p.id === productId)
   const totalPages = Math.ceil(total / limit)
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-4xl font-bold">Inventory Management</h1>
-        <p className="text-muted-foreground">
-          Manage material inward, outward, and transaction history
-        </p>
-      </div>
+      <h1 className="text-4xl font-bold">Inventory Management</h1>
 
       {/* TABS */}
       <div className="flex gap-2">
@@ -194,7 +201,7 @@ export default function Inventory() {
         </Button>
       </div>
 
-      {/* INWARD / OUTWARD FORM */}
+      {/* INWARD / OUTWARD */}
       {(activeTab === "inward" || activeTab === "outward") && (
         <Card className="max-w-2xl">
           <CardHeader>
@@ -205,36 +212,41 @@ export default function Inventory() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div>
+            {/* PRODUCT AUTO COMPLETE */}
+            <div ref={searchRef} className="relative">
               <Label>Product</Label>
-              <Select value={productId} onValueChange={setProductId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a product" />
-                </SelectTrigger>
-                <SelectContent>
-                  {products.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name} - {p.product_code} (Stock: {p.stock})
-                    </SelectItem>
+              <Input
+                placeholder="Search by name / SKU / code"
+                value={productSearch}
+                onFocus={() => setShowSuggestions(true)}
+                onChange={(e) => {
+                  setProductSearch(e.target.value)
+                  setShowSuggestions(true)
+                }}
+              />
+
+              {showSuggestions && filteredProducts.length > 0 && (
+                <div className="absolute z-20 w-full bg-background border rounded-md shadow-md mt-1 max-h-60 overflow-auto">
+                  {filteredProducts.map((p) => (
+                    <div
+                      key={p.id}
+                      onClick={() => selectProduct(p)}
+                      className="px-3 py-2 cursor-pointer hover:bg-muted"
+                    >
+                      <div className="font-medium">{p.name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {p.sku} • {p.product_code} • Stock: {p.stock}
+                      </div>
+                    </div>
                   ))}
-                </SelectContent>
-              </Select>
+                </div>
+              )}
             </div>
 
             {selectedProduct && (
-              <div className="p-3 bg-muted rounded-md">
-                <div className="flex justify-between">
-                  <span className="text-sm font-medium">Current Stock</span>
-                  <span
-                    className={`font-bold ${
-                      selectedProduct.stock <= selectedProduct.min_stock
-                        ? "text-destructive"
-                        : "text-green-600"
-                    }`}
-                  >
-                    {selectedProduct.stock}
-                  </span>
-                </div>
+              <div className="p-3 bg-muted rounded-md flex justify-between">
+                <span>Current Stock</span>
+                <span className="font-bold">{selectedProduct.stock}</span>
               </div>
             )}
 
@@ -242,9 +254,9 @@ export default function Inventory() {
               <Label>Quantity</Label>
               <Input
                 type="number"
+                min="1"
                 value={quantity}
                 onChange={(e) => setQuantity(e.target.value)}
-                min="1"
               />
             </div>
 
@@ -269,7 +281,7 @@ export default function Inventory() {
         </Card>
       )}
 
-      {/* HISTORY */}
+      {/* ================= HISTORY ================= */}
       {activeTab === "history" && (
         <div className="space-y-4">
           <div className="flex gap-4 flex-wrap">
@@ -283,6 +295,7 @@ export default function Inventory() {
               />
             </div>
 
+            {/* ✅ FILTER DROPDOWN RESTORED */}
             <Select
               value={filterType}
               onValueChange={(v) => {
@@ -290,8 +303,8 @@ export default function Inventory() {
                 setPage(1)
               }}
             >
-              <SelectTrigger className="w-48">
-                <SelectValue />
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="Filter" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
@@ -341,9 +354,8 @@ export default function Inventory() {
                 </div>
               )}
 
-              {/* PAGINATION */}
               {totalPages > 1 && (
-                <div className="flex justify-end items-center gap-3 mt-4">
+                <div className="flex justify-end gap-3 mt-4">
                   <Button
                     size="sm"
                     variant="outline"
@@ -352,11 +364,9 @@ export default function Inventory() {
                   >
                     Previous
                   </Button>
-
                   <span className="text-sm">
                     Page {page} of {totalPages}
                   </span>
-
                   <Button
                     size="sm"
                     variant="outline"

@@ -248,20 +248,30 @@ const Products = () => {
                 <div>
                   <Label>Category</Label>
                   <Select
-                    value={formData.category_id}
-                    onValueChange={(v) => setFormData({ ...formData, category_id: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select category" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+  value={formData.category_id}
+  onValueChange={(v) =>
+    setFormData({ ...formData, category_id: v })
+  }
+>
+  {/* 🔹 KEEP TRIGGER DEFAULT */}
+  <SelectTrigger>
+    <SelectValue placeholder="Select category" />
+  </SelectTrigger>
+
+  {/* 🔹 BLACK DROPDOWN ONLY */}
+  <SelectContent className="bg-black text-white border border-gray-700">
+    {categories.map((c) => (
+      <SelectItem
+        key={c.id}
+        value={c.id}
+        className="focus:bg-gray-800 data-[state=checked]:bg-gray-700"
+      >
+        {c.name}
+      </SelectItem>
+    ))}
+  </SelectContent>
+</Select>
+
                 </div>
 
                 {/* PRICING */}
@@ -366,30 +376,64 @@ const Products = () => {
           />
         </div>
 
-        <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-          <SelectTrigger className="w-full sm:w-48">
-            <SelectValue placeholder="All Categories" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Categories</SelectItem>
-            {categories.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                {c.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+       <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+  <SelectTrigger className="w-full sm:w-48 bg-black text-white border border-gray-700 focus:ring-0">
+    <SelectValue
+      placeholder="All Categories"
+      className="text-gray-400"
+    />
+  </SelectTrigger>
+
+  <SelectContent className="bg-black text-white border border-gray-700">
+    <SelectItem
+      value="all"
+      className="text-white hover:bg-gray-800 focus:bg-gray-800"
+    >
+      All Categories
+    </SelectItem>
+
+    {categories.map((c) => (
+      <SelectItem
+        key={c.id}
+        value={c.id}
+        className="text-white hover:bg-gray-800 focus:bg-gray-800"
+      >
+        {c.name}
+      </SelectItem>
+    ))}
+  </SelectContent>
+</Select>
+
 
         <Select value={priceSort} onValueChange={setPriceSort}>
-          <SelectTrigger className="w-full sm:w-48">
-            <SelectValue placeholder="Sort by Price" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">Default Sort</SelectItem>
-            <SelectItem value="low-high">Price: Low to High</SelectItem>
-            <SelectItem value="high-low">Price: High to Low</SelectItem>
-          </SelectContent>
-        </Select>
+  <SelectTrigger className="w-full sm:w-48 bg-black text-white border border-gray-700 focus:ring-0">
+    <SelectValue placeholder="Sort by Price" />
+  </SelectTrigger>
+
+  <SelectContent className="bg-black text-white border border-gray-700">
+    <SelectItem
+      value="none"
+      className="text-white hover:bg-gray-800 focus:bg-gray-800"
+    >
+      Default Sort
+    </SelectItem>
+
+    <SelectItem
+      value="low-high"
+      className="text-white hover:bg-gray-800 focus:bg-gray-800"
+    >
+      Price: Low to High
+    </SelectItem>
+
+    <SelectItem
+      value="high-low"
+      className="text-white hover:bg-gray-800 focus:bg-gray-800"
+    >
+      Price: High to Low
+    </SelectItem>
+  </SelectContent>
+</Select>
+
       </div>
 
       {/* TABLE */}
