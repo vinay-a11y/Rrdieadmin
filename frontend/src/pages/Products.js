@@ -575,17 +575,48 @@ const resetForm = () => {
                   <td className="p-2">{i + 1}</td>
                   <td className="p-2 font-mono text-sm">{p.product_code}</td>
                   <td className="p-2 font-medium">{p.name}</td>
-                    <td className="p-2">
-  {p.image_url ? (
-    <img
-      src={p.image_url}
-      alt={p.name}
-      className="w-12 h-12 rounded object-cover border"
-    />
+                   <td className="p-2">
+  {(p.image_url || (p.images && p.images.length > 0)) ? (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline">
+          View Images
+        </Button>
+      </DialogTrigger>
+
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{p.name} – Images</DialogTitle>
+        </DialogHeader>
+
+        {/* HORIZONTAL SCROLL */}
+        <div className="flex gap-4 overflow-x-auto pb-2">
+          {/* MAIN IMAGE FIRST */}
+          {p.image_url && (
+            <img
+              src={p.image_url}
+              alt="Main"
+              className="h-40 w-auto rounded-lg border object-cover flex-shrink-0"
+            />
+          )}
+
+          {/* OTHER IMAGES */}
+          {p.images?.map((img, idx) => (
+            <img
+              key={idx}
+              src={img}
+              alt={`Product ${idx}`}
+              className="h-40 w-auto rounded-lg border object-cover flex-shrink-0"
+            />
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
   ) : (
-    <span className="text-muted-foreground text-sm">No image</span>
+    <span className="text-muted-foreground text-sm">No images</span>
   )}
 </td>
+
                   <td className="p-2">{p.category_name}</td>
                   <td className="p-2 font-mono text-sm">{p.sku}</td>
                   <td className="p-2">

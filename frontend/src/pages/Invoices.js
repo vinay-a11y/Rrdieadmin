@@ -204,13 +204,15 @@ const [manualLabel, setManualLabel] = useState("Additional Charge")
 
     // Auto-fill product details when product is selected
     if (field === "product_id") {
-      const product = products.find((p) => String(p.id) === String(value))
-      if (product) {
-        updated[index].product_name = product.name
-        updated[index].price = product.selling_price
-        updated[index].total = product.selling_price * updated[index].quantity
-      }
-    }
+  const product = products.find((p) => String(p.id) === String(value))
+  if (product) {
+    updated[index].product_name = product.name
+    updated[index].price = product.selling_price
+    updated[index].image_url = product.image_url   // ✅ ADD
+    updated[index].total = product.selling_price * updated[index].quantity
+  }
+}
+
 
     // Recalculate total when quantity or price changes
     if (field === "quantity" || field === "price") {
@@ -257,15 +259,17 @@ const [manualLabel, setManualLabel] = useState("Additional Charge")
 
         return [
           ...prev,
-          {
-            product_id: product.id,
-            product_name: product.name,
-            quantity: 1,
-            price: product.selling_price,
-            gst_rate: 18,
-            total: product.selling_price,
-            sku: product.sku,
-          },
+       {
+  product_id: String(product.id),
+  product_name: product.name,
+  quantity: 1,
+  price: product.selling_price,
+  gst_rate: 18,
+  total: product.selling_price,
+  sku: product.sku,
+  image_url: product.image_url,     // ✅ ADD
+}
+
         ]
       })
 
@@ -397,15 +401,17 @@ const resetForm = () => {
         customer_phone: customerPhone,
         customer_email: customerEmail,
         customer_address: customerAddress,
-        items: lineItems.map((item) => ({
-          product_id: String(item.product_id),
-          product_name: item.product_name,
-          quantity: Number(item.quantity),
-          price: Number(item.price),
-          gst_rate: Number(item.gst_rate || 18),
-          total: Number(item.total),
-          sku: item.sku,
-        })),
+      items: lineItems.map((item) => ({
+  product_id: String(item.product_id),
+  product_name: item.product_name,
+  quantity: Number(item.quantity),
+  price: Number(item.price),
+  gst_rate: Number(item.gst_rate || 18),
+  total: Number(item.total),
+  sku: item.sku,
+  image_url: item.image_url || null, // ✅ ADD
+})),
+
         gst_amount: gstAmount,
         discount: Number(discount),
         payment_status: paymentStatus,
@@ -779,74 +785,83 @@ extra_label: manualLabel,
               )}
 
               <div className="space-y-2">
-                {lineItems.map((item, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center gap-2 border rounded-md px-2 py-1"
-                  >
-                    {/* SERIAL NO */}
-                    <div className="w-6 text-center text-xs font-semibold text-muted-foreground">
-                      {index + 1}
-                    </div>
+{lineItems.map((item, index) => (
+  <div
+    key={index}
+    className="bg-muted/30 border rounded-xl p-3 space-y-2"
+  >
+    {/* TOP ROW */}
+    <div className="flex items-center gap-3">
+      {/* IMAGE */}
+      <img
+        src={item.image_url || "/placeholder.png"}
+        alt={item.product_name}
+        className="w-14 h-14 rounded-lg object-cover border"
+      />
 
-                    {/* PRODUCT */}
-                    <div className="flex-1">
-                      <Select
-                        value={String(item.product_id)}
-                        onValueChange={(v) => updateLineItem(index, "product_id", v)}
-                      >
-                        <SelectTrigger className="h-9 bg-black text-white text-xs border-gray-700">
-                          <SelectValue placeholder="Product" />
-                        </SelectTrigger>
-                        <SelectContent className="bg-black text-white border-gray-700">
-                          {products.map((p) => (
-                            <SelectItem
-                              key={p.id}
-                              value={String(p.id)}
-                              className="text-xs focus:bg-gray-800"
-                            >
-                              {p.name} – ₹{p.selling_price}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+      {/* NAME + PRICE */}
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-sm truncate">
+          {item.product_name}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          ₹{item.price} each
+        </p>
+      </div>
 
-                    {/* QTY */}
-                    <Input
-                      type="number"
-                      min="1"
-                      value={item.quantity}
-                      onChange={(e) =>
-                        updateLineItem(index, "quantity", Number(e.target.value))
-                      }
-                      className="h-9 w-14 text-xs px-2 text-center"
-                    />
+      {/* DELETE */}
+      <Button
+        size="icon"
+        variant="ghost"
+        onClick={() => removeLineItem(index)}
+        className="text-red-500 hover:bg-red-500/10"
+      >
+        <Trash2 className="w-4 h-4" />
+      </Button>
+    </div>
 
-                    {/* TOTAL */}
-                    <Input
-                      disabled
-                      value={`₹${item.total.toFixed(0)}`}
-                      className="h-9 w-20 text-xs px-2 font-semibold text-center"
-                    />
+    {/* BOTTOM ROW */}
+    <div className="flex items-center justify-between">
+      {/* QUANTITY */}
+      <div className="flex items-center gap-2">
+        <Button
+          size="icon"
+          variant="outline"
+          onClick={() =>
+            updateLineItem(index, "quantity", Math.max(1, item.quantity - 1))
+          }
+          className="h-8 w-8"
+        >
+          −
+        </Button>
 
-                    {/* REMOVE */}
-                    <Button
-                      size="icon"
-                      variant="destructive"
-                      className="h-9 w-9"
-                      onClick={() => removeLineItem(index)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                ))}
+        <span className="w-6 text-center font-semibold text-sm">
+          {item.quantity}
+        </span>
 
-                {lineItems.length === 0 && (
-                  <div className="text-center py-6 text-xs text-muted-foreground">
-                    No items added
-                  </div>
-                )}
+        <Button
+          size="icon"
+          variant="outline"
+          onClick={() =>
+            updateLineItem(index, "quantity", item.quantity + 1)
+          }
+          className="h-8 w-8"
+        >
+          +
+        </Button>
+      </div>
+
+      {/* TOTAL */}
+      <div className="text-right">
+        <p className="text-xs text-muted-foreground">Total</p>
+        <p className="font-bold text-sm">
+          ₹{item.total.toFixed(0)}
+        </p>
+      </div>
+    </div>
+  </div>
+))}
+
               </div>
 
               <Button onClick={addLineItem} variant="outline" className="w-full mt-4 bg-transparent">
