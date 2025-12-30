@@ -55,7 +55,7 @@ export default function Invoice() {
   const scanTimeoutRef = useRef(null)
   const location = useLocation()
   const [manualAmount, setManualAmount] = useState(0)
-const [manualLabel, setManualLabel] = useState("Additional Charge")
+  const [manualLabel, setManualLabel] = useState("Additional Charge")
 
 
   useEffect(() => {
@@ -194,6 +194,8 @@ const [manualLabel, setManualLabel] = useState("Additional Charge")
         price: 0,
         gst_rate: 18,
         total: 0,
+        is_service: 0
+
       },
     ])
   }
@@ -204,14 +206,14 @@ const [manualLabel, setManualLabel] = useState("Additional Charge")
 
     // Auto-fill product details when product is selected
     if (field === "product_id") {
-  const product = products.find((p) => String(p.id) === String(value))
-  if (product) {
-    updated[index].product_name = product.name
-    updated[index].price = product.selling_price
-    updated[index].image_url = product.image_url   // ✅ ADD
-    updated[index].total = product.selling_price * updated[index].quantity
-  }
-}
+      const product = products.find((p) => String(p.id) === String(value))
+      if (product) {
+        updated[index].product_name = product.name
+        updated[index].price = product.selling_price
+        updated[index].image_url = product.image_url   // ✅ ADD
+        updated[index].total = product.selling_price * updated[index].quantity
+      }
+    }
 
 
     // Recalculate total when quantity or price changes
@@ -252,23 +254,32 @@ const [manualLabel, setManualLabel] = useState("Additional Charge")
 
         if (existingIndex !== -1) {
           const updated = [...prev]
+
+          if (updated[existingIndex].is_service === 1) {
+            return prev // 🚫 do nothing for services
+          }
+
           updated[existingIndex].quantity += 1
-          updated[existingIndex].total = updated[existingIndex].quantity * updated[existingIndex].price
+          updated[existingIndex].total =
+            updated[existingIndex].quantity * updated[existingIndex].price
+
           return updated
         }
 
         return [
           ...prev,
-       {
-  product_id: String(product.id),
-  product_name: product.name,
-  quantity: 1,
-  price: product.selling_price,
-  gst_rate: 18,
-  total: product.selling_price,
-  sku: product.sku,
-  image_url: product.image_url,     // ✅ ADD
-}
+          {
+            product_id: String(product.id),
+            product_name: product.name,
+            quantity: 1,
+            price: product.selling_price,
+            gst_rate: 18,
+            total: product.selling_price,
+            sku: product.sku,
+            image_url: product.image_url,
+            is_service: product.is_service   // ✅ ADD THIS
+            // ✅ ADD
+          }
 
         ]
       })
@@ -281,7 +292,7 @@ const [manualLabel, setManualLabel] = useState("Additional Charge")
       // ⏳ unlock after 800ms
       scanTimeoutRef.current = setTimeout(() => {
         scanLockRef.current = false
-      }, 800)
+      }, 1300)
     }
   }
 
@@ -355,35 +366,38 @@ const [manualLabel, setManualLabel] = useState("Additional Charge")
     setLineItems(lineItems.filter((_, i) => i !== index))
   }
 
- const calculateTotals = () => {
-  const itemsSubtotal = lineItems.reduce((sum, item) => sum + item.total, 0)
+  const calculateTotals = () => {
+    const itemsSubtotal = lineItems.reduce(
+      (sum, item) => sum + item.total,
+      0
+    )
 
-  const gstAmount = lineItems.reduce((sum, item) => {
-    const itemGst = (item.total * item.gst_rate) / 100
-    return sum + itemGst
-  }, 0)
+    const gstAmount = lineItems.reduce((sum, item) => {
+      return sum + (item.total * item.gst_rate) / 100
+    }, 0)
 
-  const extraAmount = Number(manualAmount || 0)
+    const extraAmount = Number(manualAmount || 0)
 
-  const subtotal = itemsSubtotal + extraAmount
-  const total = subtotal + gstAmount - discount
+    const subtotal = itemsSubtotal + extraAmount
+    const total = subtotal + gstAmount - discount
 
-  return { subtotal, gstAmount, total }
-}
+    return { subtotal, gstAmount, total }
+  }
 
-const resetForm = () => {
-  setCustomerPhone("")
-  setCustomerName("")
-  setCustomerEmail("")
-  setCustomerAddress("")
-  setCustomerId(null)
-  setLineItems([])
-  setDiscount(0)
-  setPaymentStatus("pending")
-  setSkuInput("")
-  setManualAmount(0)
-  setManualLabel("Additional Charge")
-}
+
+  const resetForm = () => {
+    setCustomerPhone("")
+    setCustomerName("")
+    setCustomerEmail("")
+    setCustomerAddress("")
+    setCustomerId(null)
+    setLineItems([])
+    setDiscount(0)
+    setPaymentStatus("pending")
+    setSkuInput("")
+    setManualAmount(0)
+    setManualLabel("Additional Charge")
+  }
 
 
   const handleCreateInvoice = async () => {
@@ -401,24 +415,20 @@ const resetForm = () => {
         customer_phone: customerPhone,
         customer_email: customerEmail,
         customer_address: customerAddress,
-      items: lineItems.map((item) => ({
-  product_id: String(item.product_id),
-  product_name: item.product_name,
-  quantity: Number(item.quantity),
-  price: Number(item.price),
-  gst_rate: Number(item.gst_rate || 18),
-  total: Number(item.total),
-  sku: item.sku,
-  image_url: item.image_url || null, // ✅ ADD
-})),
-
+        items: lineItems.map(item => ({
+          product_id: String(item.product_id),
+          product_name: item.product_name,
+          quantity: Number(item.quantity),
+          price: Number(item.price),
+          gst_rate: Number(item.gst_rate || 18),
+          total: Number(item.total),
+          sku: item.sku
+        })),
         gst_amount: gstAmount,
         discount: Number(discount),
-        payment_status: paymentStatus,
-        extra_amount: manualAmount,
-extra_label: manualLabel,
-
+        payment_status: paymentStatus
       }
+
 
       await axios.post(`${API}/invoices`, payload)
 
@@ -785,82 +795,85 @@ extra_label: manualLabel,
               )}
 
               <div className="space-y-2">
-{lineItems.map((item, index) => (
-  <div
-    key={index}
-    className="bg-muted/30 border rounded-xl p-3 space-y-2"
-  >
-    {/* TOP ROW */}
-    <div className="flex items-center gap-3">
-      {/* IMAGE */}
-      <img
-        src={item.image_url || "/placeholder.png"}
-        alt={item.product_name}
-        className="w-14 h-14 rounded-lg object-cover border"
-      />
+                {lineItems.map((item, index) => (
+                  <div
+                    key={index}
+                    className="bg-muted/30 border rounded-xl p-3 space-y-2"
+                  >
+                    {/* TOP ROW */}
+                    <div className="flex items-center gap-3">
+                      {/* IMAGE */}
+                      <img
+                        src={item.image_url || "/placeholder.png"}
+                        alt={item.product_name}
+                        className="w-14 h-14 rounded-lg object-cover border"
+                      />
 
-      {/* NAME + PRICE */}
-      <div className="flex-1 min-w-0">
-        <p className="font-semibold text-sm truncate">
-          {item.product_name}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          ₹{item.price} each
-        </p>
-      </div>
+                      {/* NAME + PRICE */}
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-sm truncate">
+                          {item.product_name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          ₹{item.price} each
+                        </p>
+                      </div>
 
-      {/* DELETE */}
-      <Button
-        size="icon"
-        variant="ghost"
-        onClick={() => removeLineItem(index)}
-        className="text-red-500 hover:bg-red-500/10"
-      >
-        <Trash2 className="w-4 h-4" />
-      </Button>
-    </div>
+                      {/* DELETE */}
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => removeLineItem(index)}
+                        className="text-red-500 hover:bg-red-500/10"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
 
-    {/* BOTTOM ROW */}
-    <div className="flex items-center justify-between">
-      {/* QUANTITY */}
-      <div className="flex items-center gap-2">
-        <Button
-          size="icon"
-          variant="outline"
-          onClick={() =>
-            updateLineItem(index, "quantity", Math.max(1, item.quantity - 1))
-          }
-          className="h-8 w-8"
-        >
-          −
-        </Button>
+                    {/* BOTTOM ROW */}
+                    <div className="flex items-center justify-between">
+                      {/* QUANTITY */}
+                      <div className="flex items-center gap-2">
+                        {/* DECREASE */}
+                        <Button
+                          size="icon"
+                          variant="outline"
+                          disabled={item.is_service === 1 || item.quantity <= 1}
+                          onClick={() =>
+                            updateLineItem(index, "quantity", item.quantity - 1)
+                          }
+                        >
+                          −
+                        </Button>
 
-        <span className="w-6 text-center font-semibold text-sm">
-          {item.quantity}
-        </span>
+                        <span className="w-6 text-center font-semibold text-sm">
+                          {item.quantity}
+                        </span>
 
-        <Button
-          size="icon"
-          variant="outline"
-          onClick={() =>
-            updateLineItem(index, "quantity", item.quantity + 1)
-          }
-          className="h-8 w-8"
-        >
-          +
-        </Button>
-      </div>
+                        {/* INCREASE */}
+                        <Button
+                          size="icon"
+                          variant="outline"
+                          disabled={item.is_service === 1}
+                          onClick={() =>
+                            updateLineItem(index, "quantity", item.quantity + 1)
+                          }
+                        >
+                          +
+                        </Button>
 
-      {/* TOTAL */}
-      <div className="text-right">
-        <p className="text-xs text-muted-foreground">Total</p>
-        <p className="font-bold text-sm">
-          ₹{item.total.toFixed(0)}
-        </p>
-      </div>
-    </div>
-  </div>
-))}
+                      </div>
+
+                      {/* TOTAL */}
+                      <div className="text-right">
+                        <p className="text-xs text-muted-foreground">Total</p>
+                        <p className="font-bold text-sm">
+                          ₹{item.total.toFixed(0)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
 
               </div>
 
@@ -878,25 +891,25 @@ extra_label: manualLabel,
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-  <Label className="text-sm">Additional Amount</Label>
-  <Input
-    type="number"
-    min="0"
-    placeholder="Enter amount"
-    value={manualAmount}
-    onChange={(e) => setManualAmount(Number(e.target.value))}
-  />
-</div>
+                  <Label className="text-sm">Additional Amount</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="Enter amount"
+                    value={manualAmount}
+                    onChange={(e) => setManualAmount(Number(e.target.value))}
+                  />
+                </div>
 
-<div>
-  <Label className="text-sm">Description</Label>
-  <Input
-    placeholder="Eg: Labour / Fitting / Service"
-    value={manualLabel}
-    onChange={(e) => setManualLabel(e.target.value)}
-  />
-</div>
- 
+                <div>
+                  <Label className="text-sm">Description</Label>
+                  <Input
+                    placeholder="Eg: Labour / Fitting / Service"
+                    value={manualLabel}
+                    onChange={(e) => setManualLabel(e.target.value)}
+                  />
+                </div>
+
                 <div>
                   <Label className="text-sm">Discount (₹)</Label>
                   <Input type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} min="0" />
@@ -939,13 +952,13 @@ extra_label: manualLabel,
                   <span className="font-medium text-foreground">₹{subtotal.toFixed(2)}</span>
                 </div>
                 {manualAmount > 0 && (
-  <div className="flex justify-between text-sm md:text-base text-muted-foreground">
-    <span>{manualLabel}:</span>
-    <span className="font-medium text-foreground">
-      ₹{manualAmount.toFixed(2)}
-    </span>
-  </div>
-)}
+                  <div className="flex justify-between text-sm md:text-base text-muted-foreground">
+                    <span>{manualLabel}:</span>
+                    <span className="font-medium text-foreground">
+                      ₹{manualAmount.toFixed(2)}
+                    </span>
+                  </div>
+                )}
 
                 <div className="flex justify-between text-sm md:text-base text-muted-foreground">
                   <span>GST Amount:</span>

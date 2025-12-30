@@ -27,7 +27,6 @@ const Products = () => {
   const [categoryFilter, setCategoryFilter] = useState("all")
   const [priceSort, setPriceSort] = useState("none")
   const [uploading, setUploading] = useState(false)
-const [imagePreview, setImagePreview] = useState("")
 const [imagePreviews, setImagePreviews] = useState([])
 
 
@@ -45,6 +44,17 @@ const [imagePreviews, setImagePreviews] = useState([])
       images: [],
 
   })
+
+  // ================================
+// STEP 1: Detect Services Category
+// ================================
+const servicesCategory = categories.find(
+  (c) => c.name.toLowerCase() === "services"
+)
+
+const isServiceSelected =
+  !!servicesCategory &&
+  formData.category_id === servicesCategory.id
 
   useEffect(() => {
     // ✅ ADDITION: SET TOKEN HERE
@@ -65,9 +75,25 @@ const [imagePreviews, setImagePreviews] = useState([])
       toast.error("Failed to load products")
     }
   }
+const removeImage = (index) => {
+  const updatedImages = formData.images.filter((_, i) => i !== index)
 
-  const handleImageUpload = async (file) => {
+  setFormData(prev => ({
+    ...prev,
+    images: updatedImages,
+    image_url: updatedImages[0] || "" // keep first as main
+  }))
+
+  setImagePreviews(updatedImages)
+}
+
+const handleImageUpload = async (file) => {
   if (!file) return
+
+  if (formData.images.length >= 5) {
+    toast.error("Maximum 5 images allowed")
+    return
+  }
 
   const token = localStorage.getItem("token")
   const formDataUpload = new FormData()
@@ -87,23 +113,19 @@ const [imagePreviews, setImagePreviews] = useState([])
       }
     )
 
-   setFormData(prev => {
-  const newImages = [...prev.images, res.data.url].slice(0, 5)
+    setFormData(prev => {
+      const newImages = [...prev.images, res.data.url].slice(0, 5)
+      return {
+        ...prev,
+        images: newImages,
+        image_url: newImages[0],
+      }
+    })
 
-  return {
-    ...prev,
-    images: newImages,
-    image_url: newImages[0], // first image = main image
-  }
-})
+    setImagePreviews(prev => [...prev, res.data.url].slice(0, 5))
 
-setImagePreviews(prev => [...prev, res.data.url].slice(0, 5))
-
-
-    setImagePreview(res.data.url)
     toast.success("Image uploaded")
-
-  } catch (err) {
+  } catch {
     toast.error("Image upload failed")
   } finally {
     setUploading(false)
@@ -151,19 +173,25 @@ setImagePreviews(prev => [...prev, res.data.url].slice(0, 5))
   const handleSubmit = async (e) => {
     e.preventDefault()
 
-    const payload = {
-      name: formData.name,
-      description: formData.description,
-      category_id: formData.category_id,
-      selling_price: Number(formData.selling_price),
-      min_selling_price: Number(formData.min_selling_price),
-      stock: Number(formData.stock),
-      min_stock: Number(formData.min_stock),
-      sku: formData.sku,
-      image_url: formData.image_url,
-        images: formData.images,
+   const payload = {
+  name: formData.name,
+  description: formData.description,
+  category_id: formData.category_id,
+  selling_price: Number(formData.selling_price),
+  min_selling_price: Number(formData.min_selling_price),
 
-    }
+  // ✅ SERVICE SAFE STOCK
+  stock: isServiceSelected ? 0 : Number(formData.stock),
+  min_stock: isServiceSelected ? 0 : Number(formData.min_stock),
+
+  sku: formData.sku,
+  image_url: formData.image_url,
+  images: formData.images,
+
+  // ✅ CRITICAL FLAG
+  is_service: isServiceSelected ? 1 : 0,
+}
+
 
     if (role === "admin") {
       payload.cost_price = Number(formData.cost_price)
@@ -185,9 +213,13 @@ setImagePreviews(prev => [...prev, res.data.url].slice(0, 5))
       toast.error(err.response?.data?.detail || "Failed to save product")
     }
   }
-
+  
 const handleEdit = (product) => {
   setEditingProduct(product)
+
+  const isService =
+    product.is_service === 1 ||
+    product.category_name?.toLowerCase() === "services"
 
   setFormData({
     name: product.name || "",
@@ -195,24 +227,22 @@ const handleEdit = (product) => {
     category_id: product.category_id || "",
     selling_price: product.selling_price?.toString() || "",
     min_selling_price: product.min_selling_price?.toString() || "",
-    stock: product.stock?.toString() || "",
-    min_stock: product.min_stock?.toString() || "",
+    stock: isService ? "0" : product.stock?.toString() || "",
+    min_stock: isService ? "0" : product.min_stock?.toString() || "",
     sku: product.sku || "",
     image_url: product.image_url || "",
-    cost_price: role === "admin" ? product.cost_price?.toString() || "" : "",
+    images: Array.isArray(product.images) ? product.images : [],
+    cost_price:
+      role === "admin"
+        ? product.cost_price?.toString() || ""
+        : "",
   })
 
-  // 👉 ADD THIS LINE
-setFormData({
-  ...formData,
-  image_url: product.image_url || "",
-  images: product.images || [],
-})
-
-setImagePreviews(product.images || [])
-
+  setImagePreviews(Array.isArray(product.images) ? product.images : [])
   setOpen(true)
 }
+
+
 
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this product?")) return
@@ -228,7 +258,8 @@ setImagePreviews(product.images || [])
 
 const resetForm = () => {
   setEditingProduct(null)
-  setImagePreview("")
+  setImagePreviews([])
+
   setFormData({
     name: "",
     description: "",
@@ -240,6 +271,7 @@ const resetForm = () => {
     min_stock: "",
     sku: "",
     image_url: "",
+    images: [],
   })
 }
 
@@ -267,7 +299,7 @@ const resetForm = () => {
               </Button>
             </DialogTrigger>
 
-            <DialogContent className="max-w-2xl">
+<DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{editingProduct ? "Edit Product" : "Add Product"}</DialogTitle>
               </DialogHeader>
@@ -309,12 +341,24 @@ const resetForm = () => {
 
                 <div>
                   <Label>Category</Label>
-                  <Select
+         <Select
   value={formData.category_id}
-  onValueChange={(v) =>
-    setFormData({ ...formData, category_id: v })
-  }
+  onValueChange={(v) => {
+    const selectedCategory = categories.find((c) => c.id === v)
+    const isService =
+      selectedCategory?.name?.toLowerCase() === "services"
+
+    setFormData({
+      ...formData,
+      category_id: v,
+
+      // ✅ AUTO FIX FOR SERVICES
+      stock: isService ? "0" : formData.stock,
+      min_stock: isService ? "0" : formData.min_stock,
+    })
+  }}
 >
+
  
 
   {/* 🔹 KEEP TRIGGER DEFAULT */}
@@ -343,19 +387,10 @@ const resetForm = () => {
 
   <div className="flex gap-3 items-center">
     {/* FILE PICKER */}
-    <Input
+ <Input
   type="file"
   accept="image/*"
-  disabled={uploading}
-  onChange={(e) => handleImageUpload(e.target.files[0])}
-/>
-
-
-    {/* CAMERA (MOBILE SUPPORT) */}
-    <Input
-  type="file"
-  accept="image/*"
-  disabled={uploading}
+  disabled={uploading || formData.images.length >= 5}
   onChange={(e) => handleImageUpload(e.target.files[0])}
 />
 
@@ -367,13 +402,33 @@ const resetForm = () => {
 
 <div className="flex gap-2 flex-wrap">
   {imagePreviews.map((img, index) => (
-    <img
-      key={index}
-      src={img}
-      className="w-24 h-24 object-cover rounded border"
-    />
+    <div key={index} className="relative group">
+      <img
+        src={img}
+        className={`w-24 h-24 object-cover rounded border ${
+          index === 0 ? "ring-2 ring-green-500" : ""
+        }`}
+      />
+
+      {/* DELETE */}
+      <button
+        type="button"
+        onClick={() => removeImage(index)}
+        className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-5 h-5 text-xs hidden group-hover:flex items-center justify-center"
+      >
+        ✕
+      </button>
+
+      {/* MAIN BADGE */}
+      {index === 0 && (
+        <span className="absolute bottom-1 left-1 bg-green-600 text-white text-xs px-1 rounded">
+          Main
+        </span>
+      )}
+    </div>
   ))}
 </div>
+
 
 </div>
 
@@ -425,37 +480,46 @@ const resetForm = () => {
                   </div>
                 </div>
 
-                {/* STOCK */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Stock</Label>
-                    <Input
-                      type="number"
-                      value={formData.stock}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          stock: e.target.value,
-                        })
-                      }
-                      required
-                    />
-                  </div>
+              {/* STOCK */}
+<div className="grid grid-cols-2 gap-4">
+  <div>
+    <Label>Stock</Label>
+    <Input
+      type="number"
+      value={formData.stock}
+      disabled={isServiceSelected}
+      onChange={(e) =>
+        setFormData({
+          ...formData,
+          stock: e.target.value,
+        })
+      }
+      required={!isServiceSelected}
+    />
 
-                  <div>
-                    <Label>Minimum Stock Alert</Label>
-                    <Input
-                      type="number"
-                      value={formData.min_stock}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          min_stock: e.target.value,
-                        })
-                      }
-                      required
-                    />
-                  </div>
+    {isServiceSelected && (
+      <p className="text-xs text-muted-foreground mt-1">
+        Services do not use inventory stock
+      </p>
+    )}
+  </div>
+
+  <div>
+    <Label>Minimum Stock Alert</Label>
+    <Input
+      type="number"
+      value={formData.min_stock}
+      disabled={isServiceSelected}
+      onChange={(e) =>
+        setFormData({
+          ...formData,
+          min_stock: e.target.value,
+        })
+      }
+      required={!isServiceSelected}
+    />
+  </div>
+
                 </div>
 
               <Button type="submit" className="w-full" disabled={uploading}>
@@ -635,24 +699,17 @@ const resetForm = () => {
         </DialogHeader>
 
         <div className="flex flex-col items-center gap-3">
-          <img
-            src={`${process.env.REACT_APP_BACKEND_URL}${p.qr_code_url}`}
-            alt="QR Code"
-            className="w-48 h-48"
-          />
+          <img src={p.qr_code_url} alt="QR Code" />
+
 
           <p className="font-mono text-sm">{p.sku}</p>
 
           <Button
-            onClick={() =>
-              window.open(
-                `${process.env.REACT_APP_BACKEND_URL}${p.qr_code_url}`,
-                "_blank"
-              )
-            }
-          >
-            Download QR
-          </Button>
+  onClick={() => window.open(p.qr_code_url, "_blank")}
+>
+  Download QR
+</Button>
+
         </div>
       </DialogContent>
     </Dialog>
