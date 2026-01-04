@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, useMemo } from "react"
 import axios from "axios"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -26,152 +26,175 @@ import {
   Search,
 } from "lucide-react"
 
-const API = `${process.env.REACT_APP_BACKEND_URL || "http://localhost:8000"}/api`
+const API =
+  `${process.env.REACT_APP_BACKEND_URL || "http://localhost:8000"}/api`
 
 export default function Inventory() {
   const [activeTab, setActiveTab] = useState("inward")
 
-  const [products, setProducts] = useState([])
-  const [transactions, setTransactions] = useState([])
-
-  // 🔍 Product auto-complete
-  const [productSearch, setProductSearch] = useState("")
-  const [selectedProduct, setSelectedProduct] = useState(null)
-  const [showSuggestions, setShowSuggestions] = useState(false)
-
-  const [quantity, setQuantity] = useState("")
+  // ================= SKU LOOKUP =================
+  const [skuInput, setSkuInput] = useState("")
+  const [lookupData, setLookupData] = useState(null)
+  const [qtyInputs, setQtyInputs] = useState({})
   const [reason, setReason] = useState("")
   const [loading, setLoading] = useState(false)
+  const skuRef = useRef(null)
 
-  // History filters
+  // ================= HISTORY =================
+  const [transactions, setTransactions] = useState([])
   const [searchTerm, setSearchTerm] = useState("")
   const [filterType, setFilterType] = useState("all")
-
-  // Pagination
   const [page, setPage] = useState(1)
   const limit = 30
   const [total, setTotal] = useState(0)
 
-  const searchRef = useRef(null)
-
-  // ================= FETCH PRODUCTS =================
-  useEffect(() => {
-    fetchProducts()
-  }, [])
-
-  const fetchProducts = async () => {
-    try {
-      const res = await axios.get(`${API}/products/list`)
-      setProducts(res.data || [])
-    } catch {
-      toast.error("Failed to load products")
+  // ================= LOOKUP =================
+  const lookupSku = async () => {
+    if (!skuInput.trim()) {
+      toast.error("Enter SKU")
+      return
     }
-  }
 
-  // ================= CLICK OUTSIDE =================
-  useEffect(() => {
-    const handler = (e) => {
-      if (searchRef.current && !searchRef.current.contains(e.target)) {
-        setShowSuggestions(false)
-      }
-    }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-  }, [])
-
-  // ================= FILTER PRODUCTS =================
-  const filteredProducts = products.filter((p) => {
-    const q = productSearch.toLowerCase()
-    return (
-      p.name.toLowerCase().includes(q) ||
-      p.sku.toLowerCase().includes(q) ||
-      p.product_code.toLowerCase().includes(q)
-    )
-  })
-
-  const selectProduct = (p) => {
-    setSelectedProduct(p)
-    setProductSearch(`${p.name} (${p.sku})`)
-    setShowSuggestions(false)
-  }
-
-  // ================= FETCH TRANSACTIONS =================
- useEffect(() => {
-  if (activeTab === "history") fetchTransactions()
-}, [activeTab, page, filterType, searchTerm])
-
-  const fetchTransactions = async () => {
     try {
       setLoading(true)
+      const res = await axios.get(
+        `${API}/inventory/lookup/${skuInput.trim()}`
+      )
 
-      const params = { page, limit }
-      if (filterType !== "all") params.type = filterType
+      setLookupData(res.data)
 
-      const res = await axios.get(`${API}/inventory/transactions`, { params })
-      let data = res.data.data || []
+      const map = {}
 
-      if (searchTerm) {
-        const s = searchTerm.toLowerCase()
-        data = data.filter(
-          (t) =>
-            t.product_name.toLowerCase().includes(s) ||
-            t.product_code.toLowerCase().includes(s) ||
-            t.reason?.toLowerCase().includes(s)
-        )
+      // 🔥 VARIANTS EXIST
+      if (res.data.variants?.length > 0) {
+        res.data.variants.forEach(v => {
+          map[v.v_sku] = ""
+        })
+      }
+      // 🔥 NO VARIANTS → PRODUCT LEVEL
+      else {
+        map[res.data.parent_sku] = ""
       }
 
-      setTransactions(data)
-      setTotal(res.data.total)
-    } catch {
-      toast.error("Failed to load transaction history")
+      setQtyInputs(map)
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "SKU not found")
+      setLookupData(null)
     } finally {
       setLoading(false)
     }
   }
 
-  // ================= SUBMIT =================
-  const resetForm = () => {
-    setSelectedProduct(null)
-    setProductSearch("")
-    setQuantity("")
-    setReason("")
+  // ================= QTY =================
+  const handleQtyChange = (sku, value) => {
+    setQtyInputs(prev => ({ ...prev, [sku]: value }))
   }
 
+  // ================= INWARD =================
   const submitInward = async () => {
-    if (!selectedProduct || !quantity) {
-      toast.error("Please fill all required fields")
-      return
+    try {
+      setLoading(true)
+
+      const reqs = Object.entries(qtyInputs)
+        .filter(([_, q]) => Number(q) > 0)
+        .map(([sku, q]) =>
+          axios.post(`${API}/inventory/material-inward/sku`, {
+            sku,
+            quantity: Number(q),
+          })
+        )
+
+      if (!reqs.length) {
+        toast.error("Enter quantity")
+        return
+      }
+
+      await Promise.all(reqs)
+      toast.success("Stock added successfully")
+      resetForm()
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed")
+    } finally {
+      setLoading(false)
     }
-
-    await axios.post(`${API}/inventory/material-inward`, {
-      product_id: selectedProduct.id,
-      quantity: Number(quantity),
-    })
-
-    toast.success("Material inward added successfully")
-    resetForm()
-    fetchProducts()
   }
 
+  // ================= OUTWARD =================
   const submitOutward = async () => {
-    if (!selectedProduct || !quantity || !reason) {
-      toast.error("Please fill all required fields")
+    if (!reason) {
+      toast.error("Reason required")
       return
     }
 
-    await axios.post(`${API}/inventory/material-outward`, {
-      product_id: selectedProduct.id,
-      quantity: Number(quantity),
-      reason,
-    })
+    try {
+      setLoading(true)
 
-    toast.success("Material outward added successfully")
-    resetForm()
-    fetchProducts()
+      const reqs = Object.entries(qtyInputs)
+        .filter(([_, q]) => Number(q) > 0)
+        .map(([sku, q]) =>
+          axios.post(`${API}/inventory/material-outward/sku`, {
+            sku,
+            quantity: Number(q),
+            reason,
+          })
+        )
+
+      if (!reqs.length) {
+        toast.error("Enter quantity")
+        return
+      }
+
+      await Promise.all(reqs)
+      toast.success("Stock deducted successfully")
+      resetForm()
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed")
+    } finally {
+      setLoading(false)
+    }
   }
+
+  const resetForm = () => {
+    setSkuInput("")
+    setLookupData(null)
+    setQtyInputs({})
+    setReason("")
+    skuRef.current?.focus()
+  }
+
+  // ================= TRANSACTIONS =================
+  useEffect(() => {
+    if (activeTab === "history") fetchTransactions()
+  }, [activeTab, page, filterType])
+const fetchTransactions = async () => {
+  try {
+    const params = { page, limit }
+    if (filterType !== "all") params.type = filterType
+
+    const res = await axios.get(`${API}/inventory/transactions`, { params })
+
+    setTransactions(res.data.data || [])
+    setTotal(res.data.total)
+  } catch {
+    toast.error("Failed to load transactions")
+  }
+}
+
+
+  const filteredTransactions = useMemo(() => {
+    if (!searchTerm) return transactions
+    const q = searchTerm.toLowerCase()
+    return transactions.filter(
+      t =>
+        t.product_name.toLowerCase().includes(q) ||
+        t.product_code.toLowerCase().includes(q) ||
+        t.variant_sku?.toLowerCase().includes(q)
+    )
+  }, [transactions, searchTerm])
 
   const totalPages = Math.ceil(total / limit)
 
+  // ================= UI =================
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-4xl font-bold">Inventory Management</h1>
@@ -182,22 +205,21 @@ export default function Inventory() {
           variant={activeTab === "inward" ? "default" : "outline"}
           onClick={() => setActiveTab("inward")}
         >
-          <ArrowDownToLine className="w-4 h-4 mr-2" />
-          Material Inward
+          <ArrowDownToLine className="w-4 h-4 mr-2" /> Inward
         </Button>
+
         <Button
           variant={activeTab === "outward" ? "default" : "outline"}
           onClick={() => setActiveTab("outward")}
         >
-          <ArrowUpFromLine className="w-4 h-4 mr-2" />
-          Material Outward
+          <ArrowUpFromLine className="w-4 h-4 mr-2" /> Outward
         </Button>
+
         <Button
           variant={activeTab === "history" ? "default" : "outline"}
           onClick={() => setActiveTab("history")}
         >
-          <History className="w-4 h-4 mr-2" />
-          Transaction History
+          <History className="w-4 h-4 mr-2" /> History
         </Button>
       </div>
 
@@ -207,65 +229,84 @@ export default function Inventory() {
           <CardHeader>
             <CardTitle>
               {activeTab === "inward"
-                ? "Add Material Inward"
-                : "Add Material Outward"}
+                ? "Material Inward"
+                : "Material Outward"}
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {/* PRODUCT AUTO COMPLETE */}
-            <div ref={searchRef} className="relative">
-              <Label>Product</Label>
-              <Input
-                placeholder="Search by name / SKU / code"
-                value={productSearch}
-                onFocus={() => setShowSuggestions(true)}
-                onChange={(e) => {
-                  setProductSearch(e.target.value)
-                  setShowSuggestions(true)
-                }}
-              />
 
-              {showSuggestions && filteredProducts.length > 0 && (
-                <div className="absolute z-20 w-full bg-background border rounded-md shadow-md mt-1 max-h-60 overflow-auto">
-                  {filteredProducts.map((p) => (
-                    <div
-                      key={p.id}
-                      onClick={() => selectProduct(p)}
-                      className="px-3 py-2 cursor-pointer hover:bg-muted"
-                    >
-                      <div className="font-medium">{p.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {p.sku} • {p.product_code} • Stock: {p.stock}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+          <CardContent className="space-y-4">
+            <div>
+              <Label>Scan / Enter SKU</Label>
+              <Input
+                ref={skuRef}
+                value={skuInput}
+                onChange={e => setSkuInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && lookupSku()}
+                placeholder="Parent SKU or Variant SKU"
+              />
+              <Button className="mt-2" onClick={lookupSku}>
+                Lookup
+              </Button>
             </div>
 
-            {selectedProduct && (
-              <div className="p-3 bg-muted rounded-md flex justify-between">
-                <span>Current Stock</span>
-                <span className="font-bold">{selectedProduct.stock}</span>
+            {lookupData && (
+              <div className="bg-muted p-4 rounded space-y-3">
+                <div className="font-semibold text-lg">
+                  {lookupData.product_name}
+                </div>
+
+                <div className="text-sm">
+                  Parent SKU:{" "}
+                  <span className="font-mono">
+                    {lookupData.parent_sku}
+                  </span>
+                </div>
+
+                <div className="font-semibold">
+                  Total Stock: {lookupData.total_stock}
+                </div>
+
+                {/* VARIANTS OR PRODUCT */}
+                {(lookupData.variants?.length > 0
+                  ? lookupData.variants
+                  : [
+                      {
+                        v_sku: lookupData.parent_sku,
+                        stock: lookupData.total_stock,
+                      },
+                    ]
+                ).map(v => (
+                  <div
+                    key={v.v_sku}
+                    className="bg-background border p-3 rounded space-y-2"
+                  >
+                    <div className="flex justify-between">
+                      <span className="font-mono">{v.v_sku}</span>
+                      <span className="font-semibold">
+                        Stock: {v.stock}
+                      </span>
+                    </div>
+
+                    <Input
+                      type="number"
+                      min="1"
+                      placeholder="Qty"
+                      value={qtyInputs[v.v_sku] || ""}
+                      onChange={e =>
+                        handleQtyChange(v.v_sku, e.target.value)
+                      }
+                    />
+                  </div>
+                ))}
               </div>
             )}
-
-            <div>
-              <Label>Quantity</Label>
-              <Input
-                type="number"
-                min="1"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-              />
-            </div>
 
             {activeTab === "outward" && (
               <div>
                 <Label>Reason</Label>
                 <Input
                   value={reason}
-                  onChange={(e) => setReason(e.target.value)}
+                  onChange={e => setReason(e.target.value)}
                 />
               </div>
             )}
@@ -273,7 +314,11 @@ export default function Inventory() {
             <Button
               className="w-full"
               disabled={loading}
-              onClick={activeTab === "inward" ? submitInward : submitOutward}
+              onClick={
+                activeTab === "inward"
+                  ? submitInward
+                  : submitOutward
+              }
             >
               Submit
             </Button>
@@ -281,105 +326,101 @@ export default function Inventory() {
         </Card>
       )}
 
-      {/* ================= HISTORY ================= */}
+      {/* HISTORY */}
       {activeTab === "history" && (
-        <div className="space-y-4">
-          <div className="flex gap-4 flex-wrap">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
-              <Input
-                className="pl-9"
-                placeholder="Search..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+        <Card>
+          <CardHeader>
+            <CardTitle>Transaction History</CardTitle>
+          </CardHeader>
+
+          <CardContent className="space-y-4">
+            <div className="flex gap-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
+                <Input
+                  className="pl-9"
+                  placeholder="Search product / SKU"
+                  value={searchTerm}
+                  onChange={e => setSearchTerm(e.target.value)}
+                />
+              </div>
+
+              <Select value={filterType} onValueChange={setFilterType}>
+                <SelectTrigger className="w-32">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="IN">Inward</SelectItem>
+                  <SelectItem value="OUT">Outward</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
-            {/* ✅ FILTER DROPDOWN RESTORED */}
-            <Select
-              value={filterType}
-              onValueChange={(v) => {
-                setFilterType(v)
-                setPage(1)
-              }}
-            >
-              <SelectTrigger className="w-44">
-                <SelectValue placeholder="Filter" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="IN">Inward</SelectItem>
-                <SelectItem value="OUT">Outward</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Transaction History</CardTitle>
-            </CardHeader>
-            <CardContent className="overflow-x-auto">
+            <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="border-b">
-                  <tr>
-                    <th className="p-2 text-left">Date</th>
-                    <th className="p-2">Type</th>
-                    <th className="p-2">Product</th>
-                    <th className="p-2">Code</th>
-                    <th className="p-2 text-right">Qty</th>
-                    <th className="p-2 text-right">Stock</th>
-                    <th className="p-2">Reason</th>
+                <thead>
+                  <tr className="border-b text-muted-foreground">
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Product</th>
+                    <th>Code</th>
+                    <th>V-SKU</th>
+                    <th>Qty</th>
+                    <th>Stock After</th>
                   </tr>
                 </thead>
+
                 <tbody>
-                  {transactions.map((t) => (
-                    <tr key={t.id} className="border-b">
-                      <td className="p-2">
-                        {new Date(t.created_at).toLocaleString()}
+                  {filteredTransactions.map(t => (
+                    <tr key={t.id} className="border-b hover:bg-muted/40">
+                      <td>{new Date(t.created_at).toLocaleString()}</td>
+                      <td
+                        className={
+                          t.type === "IN"
+                            ? "text-green-600 font-semibold"
+                            : "text-red-600 font-semibold"
+                        }
+                      >
+                        {t.type}
                       </td>
-                      <td className="p-2">{t.type}</td>
-                      <td className="p-2">{t.product_name}</td>
-                      <td className="p-2">{t.product_code}</td>
-                      <td className="p-2 text-right">{t.quantity}</td>
-                      <td className="p-2 text-right">{t.remaining_stock}</td>
-                      <td className="p-2">{t.reason || "-"}</td>
+                      <td>{t.product_name}</td>
+                      <td className="font-mono">{t.product_code}</td>
+                      <td className="font-mono">{t.variant_sku || "—"}</td>
+                      <td>{t.quantity}</td>
+<td className="font-semibold">
+  {t.variant_sku
+    ? t.variant_stock_after ?? "—"
+    : t.stock_after}
+</td>
+
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
 
-              {transactions.length === 0 && (
-                <div className="py-10 text-center text-muted-foreground">
-                  No transactions found
-                </div>
-              )}
+            <div className="flex justify-between items-center">
+              <Button
+                disabled={page === 1}
+                onClick={() => setPage(p => p - 1)}
+              >
+                Prev
+              </Button>
 
-              {totalPages > 1 && (
-                <div className="flex justify-end gap-3 mt-4">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={page === 1}
-                    onClick={() => setPage(page - 1)}
-                  >
-                    Previous
-                  </Button>
-                  <span className="text-sm">
-                    Page {page} of {totalPages}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={page === totalPages}
-                    onClick={() => setPage(page + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+              <span>
+                Page {page} / {totalPages || 1}
+              </span>
+
+              <Button
+                disabled={page >= totalPages}
+                onClick={() => setPage(p => p + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   )

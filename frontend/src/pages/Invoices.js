@@ -15,6 +15,16 @@ import { useLocation } from "react-router-dom"
 
 const API = `${process.env.REACT_APP_BACKEND_URL || "http://localhost:8000"}/api`
 
+const formatCurrency = (amount, decimals = 2) => {
+  const num = typeof amount === "number" ? amount : Number(amount)
+  return isNaN(num) ? "0.00" : num.toFixed(decimals)
+}
+
+const formatNumber = (amount, decimals = 0) => {
+  const num = typeof amount === "number" ? amount : Number(amount)
+  return isNaN(num) ? "0" : num.toFixed(decimals)
+}
+
 export default function Invoice() {
   const [activeTab, setActiveTab] = useState("create")
   const [invoices, setInvoices] = useState([])
@@ -57,7 +67,6 @@ export default function Invoice() {
   const [manualAmount, setManualAmount] = useState(0)
   const [manualLabel, setManualLabel] = useState("Additional Charge")
 
-
   useEffect(() => {
     const token = localStorage.getItem("token")
     if (token) {
@@ -66,6 +75,7 @@ export default function Invoice() {
 
     fetchProducts()
   }, [])
+
   useEffect(() => {
     fetchInvoices()
   }, [page, statusFilter, rangeFilter, monthFilter])
@@ -75,6 +85,7 @@ export default function Invoice() {
       setTimeout(() => skuInputRef.current?.focus(), 300)
     }
   }, [activeTab, scanMode])
+
   useEffect(() => {
     const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent)
     if (isMobile) {
@@ -97,7 +108,6 @@ export default function Invoice() {
       setCustomerEmail(c.email || "")
       setCustomerAddress(c.address || "")
 
-      // jump directly to create tab
       setActiveTab("create")
 
       toast.success("Customer details loaded")
@@ -194,8 +204,12 @@ export default function Invoice() {
         price: 0,
         gst_rate: 18,
         total: 0,
-        is_service: 0
-
+        is_service: 0,
+        v_sku: null,
+        variant_name: null,
+        color: null,
+        size: null,
+        variant_info: null, // Added for compatibility with updates
       },
     ])
   }
@@ -204,95 +218,142 @@ export default function Invoice() {
     const updated = [...lineItems]
     updated[index][field] = value
 
-    // Auto-fill product details when product is selected
     if (field === "product_id") {
       const product = products.find((p) => String(p.id) === String(value))
       if (product) {
-        updated[index].product_name = product.name
-        updated[index].price = product.selling_price
-        updated[index].image_url = product.image_url   // ✅ ADD
-        updated[index].total = product.selling_price * updated[index].quantity
+        const hasVariants = product.variants && product.variants.length > 0
+
+        if (hasVariants && product.variants.length === 1) {
+          // If only one variant, auto-select it
+          const variant = product.variants[0]
+          updated[index].product_name =
+            `${product.name} (${variant.variant_name || variant.color || variant.size || "Variant"})`
+          updated[index].price = variant.v_selling_price || product.selling_price
+          updated[index].v_sku = variant.v_sku
+          updated[index].variant_name = variant.variant_name
+          updated[index].color = variant.color
+          updated[index].size = variant.size
+          updated[index].image_url = variant.image_url || (product.images && product.images[0]) || "/placeholder.png"
+          updated[index].variant_info = variant // Store variant info for compatibility
+        } else {
+          // Regular product or multiple variants (show base product)
+          updated[index].product_name = product.name
+          updated[index].price = product.selling_price
+          updated[index].v_sku = null
+          updated[index].variant_name = null
+          updated[index].color = null
+          updated[index].size = null
+          updated[index].image_url = (product.images && product.images[0]) || "/placeholder.png"
+          updated[index].variant_info = null // Clear variant info
+        }
+
+        updated[index].total = updated[index].price * updated[index].quantity
       }
     }
 
-
-    // Recalculate total when quantity or price changes
     if (field === "quantity" || field === "price") {
       updated[index].total = updated[index].price * updated[index].quantity
     }
 
     setLineItems(updated)
   }
+
   const handleSkuScan = async (skuInputRaw) => {
     if (!skuInputRaw) return
-
-    // 🔒 HARD LOCK — prevents multiple scans
     if (scanLockRef.current) return
     scanLockRef.current = true
 
-    let sku = skuInputRaw.trim()
-    try {
-      const parsed = JSON.parse(skuInputRaw)
-      sku = parsed.sku || parsed.id || skuInputRaw
-    } catch {
-      // not JSON
-    }
+    let scannedSku = skuInputRaw.trim()
 
     try {
-      const response = await fetch(`${API}/products/sku/${encodeURIComponent(sku)}`, {
+      const parsed = JSON.parse(scannedSku)
+      scannedSku = parsed.v_sku || parsed.sku || scannedSku
+    } catch {}
+
+    try {
+      const res = await fetch(`${API}/products/sku/${encodeURIComponent(scannedSku)}`, {
         headers: {
           Authorization: `Bearer ${localStorage.getItem("token")}`,
         },
       })
 
-      if (!response.ok) throw new Error("Product not found")
+      if (!res.ok) throw new Error("Not found")
+      const product = await res.json()
 
-      const product = await response.json()
+      const isVariant = product.variant !== null && product.variant !== undefined
+
+      let displayName, itemPrice, itemImage, variantInfo
+
+      if (isVariant) {
+        const variant = product.variant
+        const variantLabel = variant.variant_name || variant.color || variant.size || "Variant"
+        displayName = `${product.name} (${variantLabel})`
+        itemPrice = variant.v_selling_price || product.selling_price
+        itemImage =
+          variant.image_url || variant.v_image_url || (product.images && product.images[0]) || "/placeholder.png"
+
+        variantInfo = {
+          v_sku: variant.v_sku,
+          variant_name: variant.variant_name,
+          color: variant.color,
+          size: variant.size,
+          v_selling_price: variant.v_selling_price,
+        }
+      } else {
+        displayName = product.name
+        itemPrice = product.selling_price
+        itemImage = (product.images && product.images[0]) || "/placeholder.png"
+        variantInfo = null
+      }
 
       setLineItems((prev) => {
-        const existingIndex = prev.findIndex((item) => String(item.product_id) === String(product.id))
+        const key = isVariant ? product.variant.v_sku : product.sku
 
-        if (existingIndex !== -1) {
+        const idx = prev.findIndex((i) => {
+          const itemKey = i.v_sku || i.sku
+          return itemKey === key
+        })
+
+        if (idx !== -1) {
           const updated = [...prev]
-
-          if (updated[existingIndex].is_service === 1) {
-            return prev // 🚫 do nothing for services
+          if (updated[idx].is_service !== 1) {
+            updated[idx].quantity += 1
+            updated[idx].total = updated[idx].quantity * updated[idx].price
           }
-
-          updated[existingIndex].quantity += 1
-          updated[existingIndex].total =
-            updated[existingIndex].quantity * updated[existingIndex].price
-
           return updated
         }
 
-        return [
-          ...prev,
-          {
-            product_id: String(product.id),
-            product_name: product.name,
-            quantity: 1,
-            price: product.selling_price,
-            gst_rate: 18,
-            total: product.selling_price,
-            sku: product.sku,
-            image_url: product.image_url,
-            is_service: product.is_service   // ✅ ADD THIS
-            // ✅ ADD
-          }
+        const newItem = {
+          product_id: product.id,
+          sku: product.sku,
+          product_name: displayName,
+          quantity: 1,
+          price: itemPrice,
+          gst_rate: 18,
+          total: itemPrice,
+          is_service: product.is_service,
+          image_url: itemImage,
+          // Store variant details at top level for easy access
+          v_sku: variantInfo?.v_sku || null,
+          variant_name: variantInfo?.variant_name || null,
+          color: variantInfo?.color || null,
+          size: variantInfo?.size || null,
+          v_selling_price: variantInfo?.v_selling_price || null,
+          variant_info: variantInfo, // Store variant info for compatibility with updates
+        }
 
-        ]
+        return [...prev, newItem]
       })
 
-      toast.success(`Added: ${product.name}`)
-      navigator.vibrate?.(80)
+      toast.success(`${displayName} added`)
+      setSkuInput("")
     } catch (err) {
-      toast.error("Could not find product")
+      console.error("SKU scan failed:", err)
+      toast.error("Product not found")
     } finally {
-      // ⏳ unlock after 800ms
-      scanTimeoutRef.current = setTimeout(() => {
+      setTimeout(() => {
         scanLockRef.current = false
-      }, 1300)
+      }, 500)
     }
   }
 
@@ -311,13 +372,13 @@ export default function Invoice() {
             qrbox: { width: 250, height: 250 },
             aspectRatio: 1.0,
             formatsToSupport: [
-              Html5QrcodeSupportedFormats.QR_CODE, // ✅ QR (2D)
-              Html5QrcodeSupportedFormats.DATA_MATRIX, // ✅ 2D
-              Html5QrcodeSupportedFormats.PDF_417, // ✅ 2D
-              Html5QrcodeSupportedFormats.AZTEC, // ✅ 2D
-              Html5QrcodeSupportedFormats.CODE_128, // ✅ 1D (best for SKU)
-              Html5QrcodeSupportedFormats.CODE_39, // ✅ 1D
-              Html5QrcodeSupportedFormats.EAN_13, // ✅ Retail barcode
+              Html5QrcodeSupportedFormats.QR_CODE,
+              Html5QrcodeSupportedFormats.DATA_MATRIX,
+              Html5QrcodeSupportedFormats.PDF_417,
+              Html5QrcodeSupportedFormats.AZTEC,
+              Html5QrcodeSupportedFormats.CODE_128,
+              Html5QrcodeSupportedFormats.CODE_39,
+              Html5QrcodeSupportedFormats.EAN_13,
             ],
           }
 
@@ -327,17 +388,13 @@ export default function Invoice() {
             (decodedText) => {
               handleSkuScan(decodedText)
 
-              // ⏸ pause camera briefly to avoid duplicate scans
               scannerRef.current?.pause(true)
 
               setTimeout(() => {
                 scannerRef.current?.resume()
               }, 900)
             },
-
-            (errorMessage) => {
-              // ignore scan errors
-            },
+            () => {},
           )
           setCameraLoading(false)
         } catch (err) {
@@ -367,10 +424,7 @@ export default function Invoice() {
   }
 
   const calculateTotals = () => {
-    const itemsSubtotal = lineItems.reduce(
-      (sum, item) => sum + item.total,
-      0
-    )
+    const itemsSubtotal = lineItems.reduce((sum, item) => sum + item.total, 0)
 
     const gstAmount = lineItems.reduce((sum, item) => {
       return sum + (item.total * item.gst_rate) / 100
@@ -383,7 +437,6 @@ export default function Invoice() {
 
     return { subtotal, gstAmount, total }
   }
-
 
   const resetForm = () => {
     setCustomerPhone("")
@@ -398,12 +451,18 @@ export default function Invoice() {
     setManualAmount(0)
     setManualLabel("Additional Charge")
   }
-
-
   const handleCreateInvoice = async () => {
     if (!customerName || !customerEmail || lineItems.length === 0) {
       toast.error("Please fill all required fields and add at least one item")
       return
+    }
+
+    // 🚨 SAFETY: Variant products MUST send variant SKU
+    for (const item of lineItems) {
+      if (item.variant_info && !item.v_sku) {
+        toast.error(`Variant SKU missing for ${item.product_name}. Please rescan item.`)
+        return
+      }
     }
 
     const { gstAmount } = calculateTotals()
@@ -415,20 +474,35 @@ export default function Invoice() {
         customer_phone: customerPhone,
         customer_email: customerEmail,
         customer_address: customerAddress,
-        items: lineItems.map(item => ({
+
+        items: lineItems.map((item) => ({
           product_id: String(item.product_id),
           product_name: item.product_name,
           quantity: Number(item.quantity),
           price: Number(item.price),
           gst_rate: Number(item.gst_rate || 18),
           total: Number(item.total),
-          sku: item.sku
+          sku: item.v_sku || item.sku,
+          v_sku: item.v_sku,
+          variant_name: item.variant_name,
+          color: item.color,
+          size: item.size,
+          // Ensure variant_info is passed correctly if it exists
+          variant_info: item.variant_info
+            ? {
+                v_sku: item.variant_info.v_sku,
+                variant_name: item.variant_info.variant_name,
+                color: item.variant_info.color,
+                size: item.variant_info.size,
+                v_selling_price: item.variant_info.v_selling_price,
+              }
+            : null,
         })),
+
         gst_amount: gstAmount,
         discount: Number(discount),
-        payment_status: paymentStatus
+        payment_status: paymentStatus,
       }
-
 
       await axios.post(`${API}/invoices`, payload)
 
@@ -437,7 +511,7 @@ export default function Invoice() {
       fetchInvoices()
       setActiveTab("list")
     } catch (err) {
-      console.error("[v0] Invoice creation error:", err)
+      console.error("[Invoice Error]", err)
       toast.error(err?.response?.data?.detail || "Failed to create invoice")
     }
   }
@@ -445,6 +519,30 @@ export default function Invoice() {
   const generatePDF = (invoice) => {
     const printWindow = window.open("", "_blank")
     const { subtotal, gstAmount, total } = calculateInvoiceTotals(invoice)
+
+    const formatProductName = (item) => {
+      const name = item.product_name
+      const details = []
+
+      if (item.color) details.push(`Color: ${item.color}`)
+      if (item.size) details.push(`Size: ${item.size}`)
+
+      // Check variant_info for nested details if top level is missing
+      if (!item.color && item.variant_info?.color) details.push(`Color: ${item.variant_info.color}`)
+      if (!item.size && item.variant_info?.size) details.push(`Size: ${item.variant_info.size}`)
+
+      if (item.variant_name && !name.includes(item.variant_name)) {
+        details.push(item.variant_name)
+      }
+      if (item.v_sku || item.sku) details.push(`SKU: ${item.v_sku || item.sku}`)
+
+      if (details.length > 0) {
+        return `<div style="font-weight: bold;">${name}</div><div style="color: #555; font-size: 10px; margin-top: 2px;">${details.join(" | ")}</div>`
+      }
+
+      return name
+    }
+    // </CHANGE>
 
     const pdfContent = `
       <!DOCTYPE html>
@@ -531,19 +629,19 @@ export default function Invoice() {
             </thead>
             <tbody>
               ${invoice.items
-        .map(
-          (item, index) => `
+                .map(
+                  (item, index) => `
                 <tr>
                   <td>${index + 1}</td>
-                  <td>${item.product_name}</td>
+                  <td>${formatProductName(item)}</td>
                   <td class="text-right">${item.quantity}</td>
-                  <td class="text-right">₹${item.price.toFixed(2)}</td>
+                  <td class="text-right">₹${formatCurrency(item.price)}</td>
                   <td class="text-right">${item.gst_rate}%</td>
-                  <td class="text-right">₹${item.total.toFixed(2)}</td>
+                  <td class="text-right">₹${formatCurrency(item.total)}</td>
                 </tr>
               `,
-        )
-        .join("")}
+                )
+                .join("")}
             </tbody>
           </table>
 
@@ -551,19 +649,19 @@ export default function Invoice() {
             <table>
               <tr>
                 <td>Subtotal:</td>
-                <td class="text-right">₹${subtotal.toFixed(2)}</td>
+                <td class="text-right">₹${formatCurrency(subtotal)}</td>
               </tr>
               <tr>
                 <td>GST Amount:</td>
-                <td class="text-right">₹${gstAmount.toFixed(2)}</td>
+                <td class="text-right">₹${formatCurrency(gstAmount)}</td>
               </tr>
               <tr>
                 <td>Discount:</td>
-                <td class="text-right">-₹${invoice.discount.toFixed(2)}</td>
+                <td class="text-right">-₹${formatCurrency(invoice.discount)}</td>
               </tr>
               <tr class="total-row">
                 <td>Total Amount:</td>
-                <td class="text-right">₹${total.toFixed(2)}</td>
+                <td class="text-right">₹${formatCurrency(total)}</td>
               </tr>
             </table>
           </div>
@@ -604,15 +702,12 @@ export default function Invoice() {
     printWindow.document.write(pdfContent)
     printWindow.document.close()
   }
+
   const updateInvoiceStatus = async (invoiceId, newStatus) => {
     try {
-      await axios.patch(
-        `${API}/invoices/${invoiceId}/status`,
-        null, // 👈 no body
-        {
-          params: { payment_status: newStatus },
-        },
-      )
+      await axios.patch(`${API}/invoices/${invoiceId}/status`, null, {
+        params: { payment_status: newStatus },
+      })
 
       toast.success("Invoice status updated")
       fetchInvoices()
@@ -796,30 +891,27 @@ export default function Invoice() {
 
               <div className="space-y-2">
                 {lineItems.map((item, index) => (
-                  <div
-                    key={index}
-                    className="bg-muted/30 border rounded-xl p-3 space-y-2"
-                  >
+                  <div key={index} className="bg-muted/30 border rounded-xl p-3 space-y-2">
                     {/* TOP ROW */}
                     <div className="flex items-center gap-3">
-                      {/* IMAGE */}
                       <img
                         src={item.image_url || "/placeholder.png"}
                         alt={item.product_name}
                         className="w-14 h-14 rounded-lg object-cover border"
                       />
 
-                      {/* NAME + PRICE */}
                       <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-sm truncate">
-                          {item.product_name}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          ₹{item.price} each
-                        </p>
+                        <p className="font-semibold text-sm truncate">{item.product_name}</p>
+                        {(item.color || item.size || item.variant_name) && (
+                          <div className="flex gap-2 mt-1 text-xs text-muted-foreground">
+                            {item.color && <span className="bg-muted px-1.5 py-0.5 rounded">Color: {item.color}</span>}
+                            {item.size && <span className="bg-muted px-1.5 py-0.5 rounded">Size: {item.size}</span>}
+                            {item.v_sku && <span className="font-mono text-[10px]">{item.v_sku}</span>}
+                          </div>
+                        )}
+                        <p className="text-xs text-muted-foreground mt-1">₹{item.price} each</p>
                       </div>
 
-                      {/* DELETE */}
                       <Button
                         size="icon"
                         variant="ghost"
@@ -832,49 +924,35 @@ export default function Invoice() {
 
                     {/* BOTTOM ROW */}
                     <div className="flex items-center justify-between">
-                      {/* QUANTITY */}
                       <div className="flex items-center gap-2">
-                        {/* DECREASE */}
                         <Button
                           size="icon"
                           variant="outline"
                           disabled={item.is_service === 1 || item.quantity <= 1}
-                          onClick={() =>
-                            updateLineItem(index, "quantity", item.quantity - 1)
-                          }
+                          onClick={() => updateLineItem(index, "quantity", item.quantity - 1)}
                         >
                           −
                         </Button>
 
-                        <span className="w-6 text-center font-semibold text-sm">
-                          {item.quantity}
-                        </span>
+                        <span className="w-6 text-center font-semibold text-sm">{item.quantity}</span>
 
-                        {/* INCREASE */}
                         <Button
                           size="icon"
                           variant="outline"
                           disabled={item.is_service === 1}
-                          onClick={() =>
-                            updateLineItem(index, "quantity", item.quantity + 1)
-                          }
+                          onClick={() => updateLineItem(index, "quantity", item.quantity + 1)}
                         >
                           +
                         </Button>
-
                       </div>
 
-                      {/* TOTAL */}
                       <div className="text-right">
                         <p className="text-xs text-muted-foreground">Total</p>
-                        <p className="font-bold text-sm">
-                          ₹{item.total.toFixed(0)}
-                        </p>
+                        <p className="font-bold text-sm">₹{formatNumber(item.total)}</p>
                       </div>
                     </div>
                   </div>
                 ))}
-
               </div>
 
               <Button onClick={addLineItem} variant="outline" className="w-full mt-4 bg-transparent">
@@ -917,60 +995,48 @@ export default function Invoice() {
                 <div>
                   <Label className="text-sm">Payment Status</Label>
                   <Select value={paymentStatus} onValueChange={setPaymentStatus}>
-                    <SelectTrigger className="">
+                    <SelectTrigger>
                       <SelectValue placeholder="Select status" />
                     </SelectTrigger>
 
                     <SelectContent className="bg-black text-white border-gray-700">
-                      <SelectItem
-                        value="pending"
-                        className="focus:bg-gray-800 focus:text-white"
-                      >
+                      <SelectItem value="pending" className="focus:bg-gray-800 focus:text-white">
                         Pending
                       </SelectItem>
-                      <SelectItem
-                        value="paid"
-                        className="focus:bg-gray-800 focus:text-white"
-                      >
+                      <SelectItem value="paid" className="focus:bg-gray-800 focus:text-white">
                         Paid
                       </SelectItem>
-                      <SelectItem
-                        value="overdue"
-                        className="focus:bg-gray-800 focus:text-white"
-                      >
+                      <SelectItem value="overdue" className="focus:bg-gray-800 focus:text-white">
                         Overdue
                       </SelectItem>
                     </SelectContent>
                   </Select>
-
                 </div>
               </div>
 
               <div className="border-t pt-4 space-y-2">
                 <div className="flex justify-between text-sm md:text-base text-muted-foreground">
                   <span>Subtotal:</span>
-                  <span className="font-medium text-foreground">₹{subtotal.toFixed(2)}</span>
+                  <span className="font-medium text-foreground">₹{formatCurrency(subtotal)}</span>
                 </div>
                 {manualAmount > 0 && (
                   <div className="flex justify-between text-sm md:text-base text-muted-foreground">
                     <span>{manualLabel}:</span>
-                    <span className="font-medium text-foreground">
-                      ₹{manualAmount.toFixed(2)}
-                    </span>
+                    <span className="font-medium text-foreground">₹{formatCurrency(manualAmount)}</span>
                   </div>
                 )}
 
                 <div className="flex justify-between text-sm md:text-base text-muted-foreground">
                   <span>GST Amount:</span>
-                  <span className="font-medium text-foreground">₹{gstAmount.toFixed(2)}</span>
+                  <span className="font-medium text-foreground">₹{formatCurrency(gstAmount)}</span>
                 </div>
                 <div className="flex justify-between text-sm md:text-base text-muted-foreground">
                   <span>Discount:</span>
-                  <span className="font-medium text-foreground">-₹{discount.toFixed(2)}</span>
+                  <span className="font-medium text-foreground">-₹{formatCurrency(discount)}</span>
                 </div>
                 <div className="flex justify-between text-base md:text-lg font-bold border-t pt-3 mt-2">
                   <span>Total:</span>
-                  <span>₹{total.toFixed(2)}</span>
+                  <span>₹{formatCurrency(total)}</span>
                 </div>
               </div>
 
@@ -1002,7 +1068,6 @@ export default function Invoice() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-            {/* Status */}
             <Select
               onValueChange={(v) => {
                 setPage(1)
@@ -1028,7 +1093,6 @@ export default function Invoice() {
               </SelectContent>
             </Select>
 
-            {/* Date Range */}
             <Select
               onValueChange={(v) => {
                 setPage(1)
@@ -1048,7 +1112,6 @@ export default function Invoice() {
               </SelectContent>
             </Select>
 
-            {/* Month */}
             <Input
               type="month"
               value={monthFilter}
@@ -1059,7 +1122,6 @@ export default function Invoice() {
               className="bg-black text-white border-gray-700
              col-span-1 sm:col-span-2 md:col-span-1"
             />
-
           </div>
 
           <Card>
@@ -1067,7 +1129,7 @@ export default function Invoice() {
               <CardTitle className="text-lg md:text-xl">All Invoices ({filteredInvoices.length})</CardTitle>
             </CardHeader>
             <CardContent>
-              {/* Desktop Table View - hidden on mobile */}
+              {/* Desktop */}
               <div className="hidden md:block overflow-x-auto">
                 <table className="w-full border-collapse">
                   <thead>
@@ -1090,18 +1152,14 @@ export default function Invoice() {
                           <td className="p-2 text-sm">{new Date(inv.created_at).toLocaleDateString()}</td>
                           <td className="p-2 font-medium">{inv.customer_name}</td>
                           <td className="p-2 text-sm">{inv.customer_phone || "N/A"}</td>
-                          <td className="p-2 text-right font-semibold">₹{inv.total.toFixed(2)}</td>
+                          <td className="p-2 text-right font-semibold">₹{formatCurrency(inv.total)}</td>
                           <td className="p-2">
                             <Select
                               value={inv.payment_status || "pending"}
                               onValueChange={(v) => {
                                 updateInvoiceStatus(inv.id, v)
-
-                                // update local state immediately (no crash)
                                 setInvoices((prev) =>
-                                  prev.map((i) =>
-                                    i.id === inv.id ? { ...i, payment_status: v } : i
-                                  )
+                                  prev.map((i) => (i.id === inv.id ? { ...i, payment_status: v } : i)),
                                 )
                               }}
                             >
@@ -1124,7 +1182,6 @@ export default function Invoice() {
                                 </SelectItem>
                               </SelectContent>
                             </Select>
-
                           </td>
 
                           <td className="p-2 text-right">
@@ -1143,6 +1200,7 @@ export default function Invoice() {
                 </table>
               </div>
 
+              {/* Mobile */}
               <div className="md:hidden space-y-3">
                 {filteredInvoices
                   .filter((inv) => inv && inv.id)
@@ -1157,7 +1215,7 @@ export default function Invoice() {
                             </p>
                           </div>
                           <div className="text-right shrink-0">
-                            <p className="text-lg font-bold">₹{inv.total.toFixed(2)}</p>
+                            <p className="text-lg font-bold">₹{formatCurrency(inv.total)}</p>
                           </div>
                         </div>
 
@@ -1173,9 +1231,7 @@ export default function Invoice() {
                             onValueChange={(v) => {
                               updateInvoiceStatus(inv.id, v)
                               setInvoices((prev) =>
-                                prev.map((i) =>
-                                  i.id === inv.id ? { ...i, payment_status: v } : i
-                                )
+                                prev.map((i) => (i.id === inv.id ? { ...i, payment_status: v } : i)),
                               )
                             }}
                           >
@@ -1198,7 +1254,6 @@ export default function Invoice() {
                               </SelectItem>
                             </SelectContent>
                           </Select>
-
                         </div>
 
                         <div className="flex gap-2 pt-2 border-t">
@@ -1292,10 +1347,29 @@ export default function Invoice() {
                     <tbody>
                       {viewInvoice.items.map((item, idx) => (
                         <tr key={idx} className="border-b">
-                          <td className="p-2">{item.product_name}</td>
+                          <td className="p-2">
+                            <div className="font-medium">{item.product_name}</div>
+                            {/* Updated View Invoice item list to display color and size from top level or variant_info */}
+                            {(item.color || item.size || item.v_sku || item.variant_info) && (
+                              <div className="text-[10px] text-muted-foreground flex flex-wrap gap-x-2 mt-0.5">
+                                {(item.color || item.variant_info?.color) && (
+                                  <span>Color: {item.color || item.variant_info.color}</span>
+                                )}
+                                {(item.size || item.variant_info?.size) && (
+                                  <span>Size: {item.size || item.variant_info.size}</span>
+                                )}
+                                {(item.v_sku || item.sku || item.variant_info?.v_sku) && (
+                                  <span className="font-mono bg-muted px-1 rounded">
+                                    SKU: {item.v_sku || item.sku || item.variant_info?.v_sku}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            {/* </CHANGE> */}
+                          </td>
                           <td className="text-right p-2">{item.quantity}</td>
-                          <td className="text-right p-2">₹{item.price.toFixed(2)}</td>
-                          <td className="text-right p-2 font-semibold">₹{item.total.toFixed(2)}</td>
+                          <td className="text-right p-2">₹{formatCurrency(item.price)}</td>
+                          <td className="text-right p-2 font-semibold">₹{formatCurrency(item.total)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1305,19 +1379,19 @@ export default function Invoice() {
                 <div className="mt-4 space-y-2 text-xs md:text-sm">
                   <div className="flex justify-between text-muted-foreground">
                     <span>Subtotal:</span>
-                    <span className="font-medium text-foreground">₹{viewInvoice.subtotal.toFixed(2)}</span>
+                    <span className="font-medium text-foreground">₹{formatCurrency(viewInvoice.subtotal)}</span>
                   </div>
                   <div className="flex justify-between text-muted-foreground">
                     <span>GST:</span>
-                    <span className="font-medium text-foreground">₹{viewInvoice.gst_amount.toFixed(2)}</span>
+                    <span className="font-medium text-foreground">₹{formatCurrency(viewInvoice.gst_amount)}</span>
                   </div>
                   <div className="flex justify-between text-muted-foreground">
                     <span>Discount:</span>
-                    <span className="font-medium text-foreground">-₹{viewInvoice.discount.toFixed(2)}</span>
+                    <span className="font-medium text-foreground">-₹{formatCurrency(viewInvoice.discount)}</span>
                   </div>
                   <div className="flex justify-between font-bold text-base md:text-lg border-t pt-2 mt-2">
                     <span>Total:</span>
-                    <span>₹{viewInvoice.total.toFixed(2)}</span>
+                    <span>₹{formatCurrency(viewInvoice.total)}</span>
                   </div>
                 </div>
               </div>

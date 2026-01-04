@@ -36,7 +36,7 @@ function App() {
             <Route path="customers" element={<Customers />} />
             <Route path="invoices" element={<Invoices />} />
             <Route path="categories" element={<Categories />} />
-                        <Route path="inventory" element={<Inventory />} /> {/* ✅ ADD THIS */}
+            <Route path="inventory" element={<Inventory />} /> {/* ✅ ADD THIS */}
 
           </Route>
 
