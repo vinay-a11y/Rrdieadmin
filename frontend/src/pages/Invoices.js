@@ -6,10 +6,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "sonner"
-import { Plus, Trash2, Search, Download, Eye, FileText, ScanLine, Loader2, Camera } from "lucide-react"
+import { Plus, Trash2, Search, Download, Eye, FileText, ScanLine, Loader2, Camera, X, Share2 } from "lucide-react"
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode"
 import { useLocation } from "react-router-dom"
 
@@ -42,6 +42,12 @@ export default function Invoice() {
   const [discount, setDiscount] = useState(0)
   const [paymentStatus, setPaymentStatus] = useState("pending")
 
+  const [productSearch, setProductSearch] = useState("")
+  const [searchResults, setSearchResults] = useState([])
+  const [showProductSearch, setShowProductSearch] = useState(false)
+  const [selectedProduct, setSelectedProduct] = useState(null)
+  const [showVariantDialog, setShowVariantDialog] = useState(false)
+
   // Customer fields
   const [customerPhone, setCustomerPhone] = useState("")
   const [customerName, setCustomerName] = useState("")
@@ -66,6 +72,12 @@ export default function Invoice() {
   const location = useLocation()
   const [manualAmount, setManualAmount] = useState(0)
   const [manualLabel, setManualLabel] = useState("Additional Charge")
+
+  const [productSearchQuery, setProductSearchQuery] = useState("")
+  const [productSearchResults, setProductSearchResults] = useState([])
+  const [isSearchingProducts, setIsSearchingProducts] = useState(false)
+  const searchTimeoutRef = useRef(null)
+  const [selectedProductForVariant, setSelectedProductForVariant] = useState(null)
 
   useEffect(() => {
     const token = localStorage.getItem("token")
@@ -113,6 +125,20 @@ export default function Invoice() {
       toast.success("Customer details loaded")
     }
   }, [location.state])
+
+  useEffect(() => {
+    if (productSearchQuery.length >= 2) {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current)
+      searchTimeoutRef.current = setTimeout(() => {
+        handleProductSearch(productSearchQuery)
+      }, 300)
+    } else {
+      setProductSearchResults([])
+    }
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current)
+    }
+  }, [productSearchQuery])
 
   const fetchInvoices = async () => {
     try {
@@ -167,6 +193,65 @@ export default function Invoice() {
       console.error("Product fetch failed", err)
       toast.error("Failed to load products")
     }
+  }
+
+  const handleProductSearch = async (query) => {
+    try {
+      setIsSearchingProducts(true)
+      const res = await axios.get(`${API}/products/search?q=${query}`)
+      setProductSearchResults(res.data || [])
+    } catch (err) {
+      console.error("Product search failed:", err)
+    } finally {
+      setIsSearchingProducts(false)
+    }
+  }
+
+  const selectProduct = (product) => {
+    if (product.variants && product.variants.length > 0) {
+      setSelectedProduct(product)
+      setShowVariantDialog(true)
+    } else {
+      addProductToInvoice(product)
+    }
+    setProductSearch("")
+    setSearchResults([])
+  }
+
+  const addProductToInvoice = (product, variant = null) => {
+    const newItem = {
+      product_id: product.id,
+      sku: variant ? variant.v_sku : product.sku,
+      product_name: variant
+        ? `${product.name} (${variant.variant_name || variant.color || variant.size || "Variant"})`
+        : product.name,
+      quantity: 1,
+      price: variant?.v_selling_price || product.selling_price,
+      gst_rate: 18,
+      total: variant?.v_selling_price || product.selling_price,
+      is_service: 0,
+      image_url: variant?.image_url || (product.images && product.images[0]) || "/placeholder.png",
+      v_sku: variant ? variant.v_sku : null,
+      variant_name: variant ? variant.variant_name : null,
+      color: variant ? variant.color : null,
+      size: variant ? variant.size : null,
+      variant_info: variant,
+    }
+
+    setLineItems((prev) => {
+      const existingIdx = prev.findIndex((item) => (item.v_sku || item.sku) === newItem.sku)
+      if (existingIdx !== -1) {
+        const updated = [...prev]
+        updated[existingIdx].quantity += 1
+        updated[existingIdx].total = updated[existingIdx].quantity * updated[existingIdx].price
+        return updated
+      }
+      return [...prev, newItem]
+    })
+
+    toast.success(`${newItem.product_name} added`)
+    setShowVariantDialog(false)
+    setSelectedProduct(null)
   }
 
   const searchCustomerByPhone = async (phone) => {
@@ -258,72 +343,86 @@ export default function Invoice() {
     setLineItems(updated)
   }
 
-  const handleSkuScan = async (skuInputRaw) => {
-    if (!skuInputRaw) return
-    if (scanLockRef.current) return
-    scanLockRef.current = true
+ const handleSkuScan = async (skuInputRaw) => {
+  if (!skuInputRaw) return
+  if (scanLockRef.current) return
+  scanLockRef.current = true
 
-    let scannedSku = skuInputRaw.trim()
+  let scannedSku = skuInputRaw.trim()
 
-    try {
-      const parsed = JSON.parse(scannedSku)
-      scannedSku = parsed.v_sku || parsed.sku || scannedSku
-    } catch {}
+  // ✅ Handle QR JSON payload
+  try {
+    const parsed = JSON.parse(scannedSku)
+    scannedSku = parsed.v_sku || parsed.sku || scannedSku
+  } catch {}
 
-    try {
-      const res = await fetch(`${API}/products/sku/${encodeURIComponent(scannedSku)}`, {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-      })
+  try {
+    const res = await fetch(`${API}/products/sku/${encodeURIComponent(scannedSku)}`, {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem("token")}`,
+      },
+    })
 
-      if (!res.ok) throw new Error("Not found")
-      const product = await res.json()
+    if (!res.ok) throw new Error("Not found")
+    const product = await res.json()
 
-      const isVariant = product.variant !== null && product.variant !== undefined
+    const isVariant = !!product.variant
+    const hasVariants = Array.isArray(product.variants) && product.variants.length > 0
 
-      let displayName, itemPrice, itemImage, variantInfo
+    // 🚨 CASE 1: PRODUCT QR / PRODUCT SKU WITH VARIANTS
+    if (!isVariant && hasVariants) {
+      setSelectedProductForVariant(product)
+      setShowVariantDialog(true)
+      setSkuInput("")
+      return
+    }
 
-      if (isVariant) {
-        const variant = product.variant
-        const variantLabel = variant.variant_name || variant.color || variant.size || "Variant"
-        displayName = `${product.name} (${variantLabel})`
-        itemPrice = variant.v_selling_price || product.selling_price
-        itemImage =
-          variant.image_url || variant.v_image_url || (product.images && product.images[0]) || "/placeholder.png"
+    // 🟢 CASE 2: VARIANT QR / VARIANT SKU
+    let displayName, itemPrice, itemImage, variantInfo
 
-        variantInfo = {
-          v_sku: variant.v_sku,
-          variant_name: variant.variant_name,
-          color: variant.color,
-          size: variant.size,
-          v_selling_price: variant.v_selling_price,
+    if (isVariant) {
+      const variant = product.variant
+      const variantLabel = variant.variant_name || variant.color || variant.size || "Variant"
+
+      displayName = `${product.name} (${variantLabel})`
+      itemPrice = variant.v_selling_price || product.selling_price
+      itemImage =
+        variant.image_url ||
+        variant.v_image_url ||
+        product.images?.[0] ||
+        "/placeholder.png"
+
+      variantInfo = {
+        v_sku: variant.v_sku,
+        variant_name: variant.variant_name,
+        color: variant.color,
+        size: variant.size,
+        v_selling_price: variant.v_selling_price,
+      }
+    } else {
+      // 🟢 CASE 3: PRODUCT WITHOUT VARIANTS
+      displayName = product.name
+      itemPrice = product.selling_price
+      itemImage = product.images?.[0] || "/placeholder.png"
+      variantInfo = null
+    }
+
+    setLineItems((prev) => {
+      const key = isVariant ? variantInfo.v_sku : product.sku
+      const idx = prev.findIndex((i) => (i.v_sku || i.sku) === key)
+
+      if (idx !== -1) {
+        const updated = [...prev]
+        if (updated[idx].is_service !== 1) {
+          updated[idx].quantity += 1
+          updated[idx].total = updated[idx].quantity * updated[idx].price
         }
-      } else {
-        displayName = product.name
-        itemPrice = product.selling_price
-        itemImage = (product.images && product.images[0]) || "/placeholder.png"
-        variantInfo = null
+        return updated
       }
 
-      setLineItems((prev) => {
-        const key = isVariant ? product.variant.v_sku : product.sku
-
-        const idx = prev.findIndex((i) => {
-          const itemKey = i.v_sku || i.sku
-          return itemKey === key
-        })
-
-        if (idx !== -1) {
-          const updated = [...prev]
-          if (updated[idx].is_service !== 1) {
-            updated[idx].quantity += 1
-            updated[idx].total = updated[idx].quantity * updated[idx].price
-          }
-          return updated
-        }
-
-        const newItem = {
+      return [
+        ...prev,
+        {
           product_id: product.id,
           sku: product.sku,
           product_name: displayName,
@@ -333,29 +432,29 @@ export default function Invoice() {
           total: itemPrice,
           is_service: product.is_service,
           image_url: itemImage,
-          // Store variant details at top level for easy access
+
           v_sku: variantInfo?.v_sku || null,
           variant_name: variantInfo?.variant_name || null,
           color: variantInfo?.color || null,
           size: variantInfo?.size || null,
           v_selling_price: variantInfo?.v_selling_price || null,
-          variant_info: variantInfo, // Store variant info for compatibility with updates
-        }
+          variant_info: variantInfo,
+        },
+      ]
+    })
 
-        return [...prev, newItem]
-      })
-
-      toast.success(`${displayName} added`)
-      setSkuInput("")
-    } catch (err) {
-      console.error("SKU scan failed:", err)
-      toast.error("Product not found")
-    } finally {
-      setTimeout(() => {
-        scanLockRef.current = false
-      }, 500)
-    }
+    toast.success(`${displayName} added`)
+    setSkuInput("")
+  } catch (err) {
+    console.error("SKU scan failed:", err)
+    toast.error("Product not found")
+  } finally {
+    setTimeout(() => {
+      scanLockRef.current = false
+    }, 500)
   }
+}
+
 
   useEffect(() => {
     let html5QrCode = null
@@ -394,7 +493,7 @@ export default function Invoice() {
                 scannerRef.current?.resume()
               }, 900)
             },
-            () => {},
+            () => { },
           )
           setCameraLoading(false)
         } catch (err) {
@@ -450,12 +549,24 @@ export default function Invoice() {
     setSkuInput("")
     setManualAmount(0)
     setManualLabel("Additional Charge")
+    // Reset manual search states
+    setProductSearch("")
+    setSearchResults([])
+    setShowProductSearch(false)
+    setSelectedProduct(null)
+    setShowVariantDialog(false)
+    // Reset new product search states
+    setProductSearchQuery("")
+    setProductSearchResults([])
+    setIsSearchingProducts(false)
+    setSelectedProductForVariant(null)
   }
   const handleCreateInvoice = async () => {
-    if (!customerName || !customerEmail || lineItems.length === 0) {
-      toast.error("Please fill all required fields and add at least one item")
+    if (!customerName || !customerPhone || lineItems.length === 0) {
+      toast.error("Customer name, phone number and at least one item are required")
       return
     }
+
 
     // 🚨 SAFETY: Variant products MUST send variant SKU
     for (const item of lineItems) {
@@ -490,12 +601,12 @@ export default function Invoice() {
           // Ensure variant_info is passed correctly if it exists
           variant_info: item.variant_info
             ? {
-                v_sku: item.variant_info.v_sku,
-                variant_name: item.variant_info.variant_name,
-                color: item.variant_info.color,
-                size: item.variant_info.size,
-                v_selling_price: item.variant_info.v_selling_price,
-              }
+              v_sku: item.variant_info.v_sku,
+              variant_name: item.variant_info.variant_name,
+              color: item.variant_info.color,
+              size: item.variant_info.size,
+              v_selling_price: item.variant_info.v_selling_price,
+            }
             : null,
         })),
 
@@ -542,7 +653,6 @@ export default function Invoice() {
 
       return name
     }
-    // </CHANGE>
 
     const pdfContent = `
       <!DOCTYPE html>
@@ -608,7 +718,7 @@ export default function Invoice() {
               <h3>INVOICE DETAILS</h3>
               <p><strong>Invoice No:</strong> ${invoice.invoice_number}</p>
               <p><strong>Date:</strong> ${new Date(invoice.created_at).toLocaleDateString()}</p>
-              <p><strong>Status:</strong> 
+              <p><strong>Status:</strong>
                 <span class="badge badge-${invoice.payment_status}">
                   ${invoice.payment_status.toUpperCase()}
                 </span>
@@ -629,8 +739,8 @@ export default function Invoice() {
             </thead>
             <tbody>
               ${invoice.items
-                .map(
-                  (item, index) => `
+        .map(
+          (item, index) => `
                 <tr>
                   <td>${index + 1}</td>
                   <td>${formatProductName(item)}</td>
@@ -640,8 +750,8 @@ export default function Invoice() {
                   <td class="text-right">₹${formatCurrency(item.total)}</td>
                 </tr>
               `,
-                )
-                .join("")}
+        )
+        .join("")}
             </tbody>
           </table>
 
@@ -703,6 +813,29 @@ export default function Invoice() {
     printWindow.document.close()
   }
 
+  const shareInvoice = async (invoice) => {
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: `Invoice ${invoice.invoice_number}`,
+          text: `Invoice for ${invoice.customer_name} - Total: ₹${invoice.total}`,
+          url: window.location.origin, // You can change this to a specific invoice link if available
+        })
+        toast.success("Shared successfully")
+      } else {
+        // Fallback to clipboard or just generate PDF
+        await navigator.clipboard.writeText(`Invoice ${invoice.invoice_number} for ${invoice.customer_name}`)
+        toast.info("Invoice details copied to clipboard (Sharing not supported on this browser)")
+        generatePDF(invoice)
+      }
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        console.error("Error sharing:", error)
+        toast.error("Failed to share")
+      }
+    }
+  }
+
   const updateInvoiceStatus = async (invoiceId, newStatus) => {
     try {
       await axios.patch(`${API}/invoices/${invoiceId}/status`, null, {
@@ -732,9 +865,93 @@ export default function Invoice() {
 
   const { subtotal, gstAmount, total } = calculateTotals()
 
+  const handleSelectProduct = (product) => {
+    const variants = product.variants || []
+
+    if (variants.length > 1) {
+      // Show variant selection dialog
+      setSelectedProductForVariant(product)
+      setShowVariantDialog(true)
+    } else if (variants.length === 1) {
+      // Auto-select the only variant
+      addSelectedProductToInvoice(product, variants[0])
+    } else {
+      // No variants, add base product
+      addSelectedProductToInvoice(product, null)
+    }
+
+    // Clear search
+    setProductSearchQuery("")
+    setProductSearchResults([])
+  }
+
+  const addSelectedProductToInvoice = (product, variant) => {
+    let displayName, itemPrice, itemImage, itemSku, variantInfo
+
+    if (variant) {
+      const variantLabel = variant.variant_name || variant.color || variant.size || "Variant"
+      displayName = `${product.name} (${variantLabel})`
+      itemPrice = variant.v_selling_price || product.selling_price
+      itemImage =
+        variant.image_url || variant.v_image_url || (product.images && product.images[0]) || "/placeholder.png"
+      itemSku = variant.v_sku
+      variantInfo = {
+        v_sku: variant.v_sku,
+        variant_name: variant.variant_name,
+        color: variant.color,
+        size: variant.size,
+        v_selling_price: variant.v_selling_price,
+      }
+    } else {
+      displayName = product.name
+      itemPrice = product.selling_price
+      itemImage = (product.images && product.images[0]) || "/placeholder.png"
+      itemSku = product.sku
+      variantInfo = null
+    }
+
+    setLineItems((prev) => {
+      const key = itemSku
+      const idx = prev.findIndex((i) => (i.v_sku || i.sku) === key)
+
+      if (idx !== -1) {
+        const updated = [...prev]
+        if (updated[idx].is_service !== 1) {
+          updated[idx].quantity += 1
+          updated[idx].total = updated[idx].quantity * updated[idx].price
+        }
+        return updated
+      }
+
+      return [
+        ...prev,
+        {
+          product_id: product.id,
+          sku: product.sku,
+          product_name: displayName,
+          quantity: 1,
+          price: itemPrice,
+          gst_rate: 18,
+          total: itemPrice,
+          is_service: product.is_service,
+          image_url: itemImage,
+          v_sku: variantInfo?.v_sku || null,
+          variant_name: variantInfo?.variant_name || null,
+          color: variantInfo?.color || null,
+          size: variantInfo?.size || null,
+          variant_info: variantInfo,
+        },
+      ]
+    })
+
+    toast.success(`${displayName} added`)
+    setShowVariantDialog(false)
+    setSelectedProductForVariant(null)
+  }
+
   return (
-    <div className="p-3 md:p-6 space-y-4 md:space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4">
+    <div className="container mx-auto p-4 max-w-6xl pb-20">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4 mb-6">
         <div>
           <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold">Invoice Management</h1>
           <p className="text-muted-foreground text-sm md:text-base mt-1">Create and manage invoices with GST</p>
@@ -762,97 +979,299 @@ export default function Invoice() {
       </div>
 
       {activeTab === "create" && (
-        <div className="space-y-4 md:space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg md:text-xl">Customer Details</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-sm">Customer Phone</Label>
-                  <Input
-                    placeholder="Enter phone number"
-                    value={customerPhone}
-                    onChange={(e) => setCustomerPhone(e.target.value)}
-                    onBlur={(e) => {
-                      if (!customerId) {
-                        searchCustomerByPhone(e.target.value)
-                      }
-                    }}
-                  />
-                </div>
-                <div>
-                  <Label className="text-sm">Customer Name *</Label>
-                  <Input
-                    placeholder="Enter name"
-                    value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    required
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-sm">Email *</Label>
-                  <Input
-                    type="email"
-                    placeholder="customer@example.com"
-                    value={customerEmail}
-                    onChange={(e) => setCustomerEmail(e.target.value)}
-                    required
-                  />
-                </div>
-                <div>
-                  <Label className="text-sm">Address</Label>
-                  <Input
-                    placeholder="Enter address"
-                    value={customerAddress}
-                    onChange={(e) => setCustomerAddress(e.target.value)}
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="lg:col-span-2 space-y-6">
+            <Card className="border-none shadow-xl bg-card/50 backdrop-blur-sm overflow-hidden">
+              <CardHeader className="border-b bg-muted/30">
+                <CardTitle className="flex items-center gap-2">
+                  <Plus className="w-5 h-5 text-primary" />
+                  Create Invoice
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6 space-y-6">
+                {/* Customer Details Section */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Customer Details
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                        Customer Phone<span className="text-red-500">*</span>
 
-          <Card>
-            <CardHeader className="flex flex-col space-y-3 md:flex-row md:items-center md:justify-between md:space-y-0 pb-4">
-              <CardTitle className="text-lg md:text-xl">Invoice Items</CardTitle>
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-                {/* SKU Input */}
-                <div className="relative flex-1 sm:w-48 md:w-64">
-                  <ScanLine className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    ref={skuInputRef}
-                    placeholder={scanMode === "barcode" ? "Scan barcode..." : "Scan QR..."}
-                    className="pl-9 text-sm"
-                    value={skuInput}
-                    onChange={(e) => setSkuInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && scanMode === "barcode") {
-                        e.preventDefault()
-                        handleSkuScan(skuInput)
-                        setSkuInput("")
-                      }
-                    }}
-                    disabled={scanMode === "camera"}
-                  />
+                      </Label>
+                      <Input
+                        placeholder="Enter phone number"
+                        value={customerPhone}
+                        onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, ""))}
+                        maxLength={10}
+                        required
+                        className="h-11 rounded-xl"
+                      />
+
+                    </div>
+                    <div>
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                        Customer Name <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        placeholder="Enter name"
+                        value={customerName}
+                        onChange={(e) => setCustomerName(e.target.value)}
+                        required
+                        className="h-11 rounded-xl"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                        Email
+                      </Label>
+                     <Input
+  type="email"
+  placeholder="customer@example.com (optional)"
+  value={customerEmail}
+  onChange={(e) => setCustomerEmail(e.target.value)}
+  className="h-11 rounded-xl"
+/>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                        Address
+                      </Label>
+                      <Input
+                        placeholder="Enter address"
+                        value={customerAddress}
+                        onChange={(e) => setCustomerAddress(e.target.value)}
+                        className="h-11 rounded-xl"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                {/* Camera & Barcode Buttons */}
+                <div className="space-y-4">
+                  <div className="relative">
+                    <Label
+                      htmlFor="productSearch"
+                      className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block"
+                    >
+                      Search Product by Name or SKU
+                    </Label>
+                    <div className="relative group">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
+                      <Input
+                        id="productSearch"
+                        placeholder="Search products (e.g., Thunder, 1309)..."
+                        value={productSearchQuery}
+                        onChange={(e) => setProductSearchQuery(e.target.value)}
+                        className="pl-10 h-12 bg-muted/50 border-muted-foreground/20 focus:border-primary/50 transition-all rounded-xl"
+                      />
+                      {productSearchQuery && (
+                        <button
+                          onClick={() => setProductSearchQuery("")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-muted text-muted-foreground"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Search Results Dropdown */}
+                    {productSearchResults.length > 0 && (
+                      <div className="absolute z-50 w-full mt-2 bg-card border rounded-xl shadow-2xl max-h-[400px] overflow-auto animate-in fade-in zoom-in-95 duration-200">
+                        <div className="p-2 space-y-1">
+                          {productSearchResults.map((product) => (
+                            <button
+                              key={product.id}
+                              onClick={() => handleSelectProduct(product)}
+                              className="w-full flex items-center gap-4 p-3 rounded-lg hover:bg-muted transition-colors text-left group"
+                            >
+                              <div className="w-12 h-12 rounded-lg bg-muted border flex-shrink-0 overflow-hidden">
+                                <img
+                                  src={product.images?.[0] || "/placeholder.png"}
+                                  alt={product.name}
+                                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                                />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-semibold text-sm truncate group-hover:text-primary transition-colors">
+                                  {product.name}
+                                </p>
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
+                                  <span className="font-mono bg-muted/80 px-1.5 py-0.5 rounded text-[10px]">
+                                    {product.sku}
+                                  </span>
+                                  <span>•</span>
+                                  <span className="text-primary font-medium">₹{product.selling_price}</span>
+                                  <span>•</span>
+                                  {/* <span className={product.stock > 0 ? "text-emerald-500" : "text-red-500"}>
+                                    {product.stock > 0 ? `${product.stock} in stock` : "Out"}
+                                  </span> */}
+                                </div>
+                              </div>
+                              {product.variants?.length > 0 && (
+                                <div className="bg-primary/10 text-primary text-[10px] font-bold px-2 py-1 rounded-full whitespace-nowrap">
+                                  {product.variants.length} VARIANTS
+                                </div>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {isSearchingProducts && (
+                      <div className="absolute right-12 top-1/2 -translate-y-1/2">
+                        <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* <div className="relative">
+                    <div className="absolute inset-0 flex items-center">
+                      <span className="w-full border-t" />
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase">
+                      <span className="bg-card px-2 text-muted-foreground">OR SCAN SKU</span>
+                    </div>
+                  </div>
+ */}
+                  {/* SKU Scan Section
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        ref={skuInputRef}
+                        placeholder="Scan or Enter SKU..."
+                        value={skuInput}
+                        onChange={(e) => setSkuInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleSkuScan(skuInput)}
+                        className="pl-10 h-11 bg-muted/50 border-muted-foreground/20 rounded-xl"
+                      />
+                    </div>
+                    <Button
+                      onClick={() => handleSkuScan(skuInput)}
+                      className="h-11 px-6 rounded-xl shadow-lg shadow-primary/20"
+                    >
+                      Add
+                    </Button>
+                  </div> */}
+                </div>
+
+                {/* Line Items Section */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Line Items
+                  </h3>
+                  <div className="max-h-[600px] overflow-y-auto pr-2 custom-scrollbar space-y-4">
+                    {lineItems.length === 0 ? (
+                      <div className="text-center py-10 border-2 border-dashed rounded-2xl border-muted-foreground/20">
+                        <Plus className="w-10 h-10 mx-auto mb-2 text-muted-foreground/30" />
+                        <p className="text-muted-foreground">Add products to start your invoice</p>
+                      </div>
+                    ) : (
+                      lineItems.map((item, index) => (
+                        <div
+                          key={index}
+                          className="p-4 border rounded-2xl bg-card/50 hover:border-primary/30 transition-all group"
+                        >
+                          <div className="flex gap-4">
+                            <div className="w-20 h-20 rounded-xl bg-muted border overflow-hidden shrink-0">
+                              <img
+                                src={item.image_url || "/placeholder.png"}
+                                alt={item.product_name}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex justify-between items-start gap-2">
+                                <h4 className="font-bold text-sm line-clamp-2">{item.product_name}</h4>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => removeLineItem(index)}
+                                  className="h-8 w-8 text-destructive hover:bg-destructive/10 shrink-0"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </div>
+                              <div className="flex items-center justify-between mt-3">
+                                <div className="flex items-center border rounded-lg overflow-hidden h-9">
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={() => updateLineItem(index, "quantity", Math.max(1, item.quantity - 1))}
+                                    className="h-full w-9 rounded-none hover:bg-muted"
+                                  >
+                                    -
+                                  </Button>
+                                  <div className="w-10 text-center font-bold text-sm">{item.quantity}</div>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={() => updateLineItem(index, "quantity", item.quantity + 1)}
+                                    className="h-full w-9 rounded-none hover:bg-muted"
+                                  >
+                                    +
+                                  </Button>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-xs text-muted-foreground">Price</p>
+                                  <p className="font-bold text-primary">₹{formatCurrency(item.price)}</p>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Sidebar */}
+          <div className="lg:col-span-1 space-y-6">
+            <Card className="border-none shadow-xl bg-card/50 backdrop-blur-sm overflow-hidden">
+              <CardHeader className="border-b bg-muted/30">
+                <CardTitle className="flex items-center gap-2">
+                  <ScanLine className="w-5 h-5 text-primary" />
+                  Scan Item
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6 space-y-4">
+                {showCamera && (
+                  <div className="relative mx-auto max-w-xs overflow-hidden rounded-lg border-2 border-primary aspect-square flex items-center justify-center bg-black">
+                    {cameraLoading && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+                        <Loader2 className="w-8 h-8 animate-spin text-white" />
+                      </div>
+                    )}
+                    <div id="reader" className="w-full h-full"></div>
+                    <div className="absolute bottom-4 left-0 right-0 text-center pointer-events-none z-20">
+                      <p className="text-white text-xs bg-black/50 inline-block px-2 py-1 rounded">
+                        Align QR code inside the box
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex gap-2">
                   <Button
                     variant={scanMode === "camera" ? "default" : "outline"}
                     onClick={() => {
                       setScanMode("camera")
                       setShowCamera(true)
+                      if (scannerRef.current && scannerRef.current.isScanning) {
+                        scannerRef.current.resume()
+                      }
                     }}
-                    className="flex-1 sm:flex-none"
-                    size="sm"
+                    className="flex-1 rounded-lg"
+                    size="lg"
                   >
-                    <Camera className="w-4 h-4 sm:mr-2" />
-                    <span className="hidden sm:inline">Use Phone</span>
-                    <span className="sm:hidden">Camera</span>
+                    <Camera className="w-4 h-4 mr-2" /> Use Phone
                   </Button>
 
                   <Button
@@ -862,196 +1281,163 @@ export default function Invoice() {
                       setShowCamera(false)
                       setTimeout(() => skuInputRef.current?.focus(), 200)
                     }}
-                    className="flex-1 sm:flex-none"
-                    size="sm"
+                    className="flex-1 rounded-lg"
+                    size="lg"
                   >
-                    <ScanLine className="w-4 h-4 sm:mr-2" />
-                    <span className="hidden sm:inline">Use Device</span>
-                    <span className="sm:hidden">Device</span>
+                    <ScanLine className="w-4 h-4 mr-2" /> Use Device
                   </Button>
                 </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {showCamera && (
-                <div className="mb-6 relative mx-auto max-w-md overflow-hidden rounded-lg border-2 border-primary bg-black aspect-square flex items-center justify-center">
-                  {cameraLoading && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-                      <Loader2 className="w-8 h-8 animate-spin text-white" />
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">OR SCAN SKU</span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      ref={skuInputRef}
+                      placeholder="Scan or Enter SKU..."
+                      value={skuInput}
+                      onChange={(e) => setSkuInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleSkuScan(skuInput)}
+                      className="pl-10 h-11 bg-muted/50 border-muted-foreground/20 rounded-xl"
+                      disabled={scanMode === "camera"}
+                    />
+                  </div>
+                  <Button
+                    onClick={() => handleSkuScan(skuInput)}
+                    disabled={scanMode === "camera"}
+                    className="h-11 px-6 rounded-xl shadow-lg shadow-primary/20"
+                  >
+                    Add
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-none shadow-xl bg-card/50 backdrop-blur-sm overflow-hidden">
+              <CardHeader className="border-b bg-muted/30">
+                <CardTitle className="flex items-center gap-2">
+                  <ScanLine className="w-5 h-5 text-primary" />
+                  Invoice Summary
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                      Additional Amount
+                    </Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      placeholder="Enter amount"
+                      value={manualAmount}
+                      onChange={(e) => setManualAmount(Number(e.target.value))}
+                      className="h-11 rounded-xl"
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                      Description
+                    </Label>
+                    <Input
+                      placeholder="Eg: Labour / Fitting / Service"
+                      value={manualLabel}
+                      onChange={(e) => setManualLabel(e.target.value)}
+                      className="h-11 rounded-xl"
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                      Discount (₹)
+                    </Label>
+                    <Input
+                      type="number"
+                      value={discount}
+                      onChange={(e) => setDiscount(Number(e.target.value))}
+                      min="0"
+                      className="h-11 rounded-xl"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                      Payment Status
+                    </Label>
+                    <Select value={paymentStatus} onValueChange={setPaymentStatus}>
+                      <SelectTrigger className="h-11 rounded-xl">
+                        <SelectValue placeholder="Select status" />
+                      </SelectTrigger>
+
+                      <SelectContent className="bg-popover text-popover-foreground border-border shadow-md rounded-xl">
+                        <SelectItem value="pending" className="focus:bg-accent focus:text-accent-foreground">
+                          Pending
+                        </SelectItem>
+                        <SelectItem value="paid" className="focus:bg-accent focus:text-accent-foreground">
+                          Paid
+                        </SelectItem>
+                        <SelectItem value="overdue" className="focus:bg-accent focus:text-accent-foreground">
+                          Overdue
+                        </SelectItem>
+                        <SelectItem value="cancelled" className="focus:bg-accent focus:text-accent-foreground">
+                          Cancelled
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="border-t pt-4 space-y-2 text-sm">
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Subtotal:</span>
+                    <span className="font-medium text-foreground">₹{formatCurrency(subtotal)}</span>
+                  </div>
+                  {manualAmount > 0 && (
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>{manualLabel}:</span>
+                      <span className="font-medium text-foreground">₹{formatCurrency(manualAmount)}</span>
                     </div>
                   )}
-                  <div id="reader" className="w-full h-full"></div>
-                  <div className="absolute bottom-4 left-0 right-0 text-center pointer-events-none z-20">
-                    <p className="text-white text-xs bg-black/50 inline-block px-2 py-1 rounded">
-                      Align QR code inside the box
-                    </p>
+
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>GST Amount:</span>
+                    <span className="font-medium text-foreground">₹{formatCurrency(gstAmount)}</span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Discount:</span>
+                    <span className="font-medium text-foreground">-₹{formatCurrency(discount)}</span>
+                  </div>
+                  <div className="flex justify-between font-bold text-base border-t pt-3 mt-2">
+                    <span>Total:</span>
+                    <span>₹{formatCurrency(total)}</span>
                   </div>
                 </div>
-              )}
 
-              <div className="space-y-2">
-                {lineItems.map((item, index) => (
-                  <div key={index} className="bg-muted/30 border rounded-xl p-3 space-y-2">
-                    {/* TOP ROW */}
-                    <div className="flex items-center gap-3">
-                      <img
-                        src={item.image_url || "/placeholder.png"}
-                        alt={item.product_name}
-                        className="w-14 h-14 rounded-lg object-cover border"
-                      />
-
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-sm truncate">{item.product_name}</p>
-                        {(item.color || item.size || item.variant_name) && (
-                          <div className="flex gap-2 mt-1 text-xs text-muted-foreground">
-                            {item.color && <span className="bg-muted px-1.5 py-0.5 rounded">Color: {item.color}</span>}
-                            {item.size && <span className="bg-muted px-1.5 py-0.5 rounded">Size: {item.size}</span>}
-                            {item.v_sku && <span className="font-mono text-[10px]">{item.v_sku}</span>}
-                          </div>
-                        )}
-                        <p className="text-xs text-muted-foreground mt-1">₹{item.price} each</p>
-                      </div>
-
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => removeLineItem(index)}
-                        className="text-red-500 hover:bg-red-500/10"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-
-                    {/* BOTTOM ROW */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="icon"
-                          variant="outline"
-                          disabled={item.is_service === 1 || item.quantity <= 1}
-                          onClick={() => updateLineItem(index, "quantity", item.quantity - 1)}
-                        >
-                          −
-                        </Button>
-
-                        <span className="w-6 text-center font-semibold text-sm">{item.quantity}</span>
-
-                        <Button
-                          size="icon"
-                          variant="outline"
-                          disabled={item.is_service === 1}
-                          onClick={() => updateLineItem(index, "quantity", item.quantity + 1)}
-                        >
-                          +
-                        </Button>
-                      </div>
-
-                      <div className="text-right">
-                        <p className="text-xs text-muted-foreground">Total</p>
-                        <p className="font-bold text-sm">₹{formatNumber(item.total)}</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <Button onClick={addLineItem} variant="outline" className="w-full mt-4 bg-transparent">
-                <Plus className="w-4 h-4 mr-2" />
-                Add Item
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg md:text-xl">Invoice Summary</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-sm">Additional Amount</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    placeholder="Enter amount"
-                    value={manualAmount}
-                    onChange={(e) => setManualAmount(Number(e.target.value))}
-                  />
-                </div>
-
-                <div>
-                  <Label className="text-sm">Description</Label>
-                  <Input
-                    placeholder="Eg: Labour / Fitting / Service"
-                    value={manualLabel}
-                    onChange={(e) => setManualLabel(e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <Label className="text-sm">Discount (₹)</Label>
-                  <Input type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} min="0" />
-                </div>
-                <div>
-                  <Label className="text-sm">Payment Status</Label>
-                  <Select value={paymentStatus} onValueChange={setPaymentStatus}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select status" />
-                    </SelectTrigger>
-
-                    <SelectContent className="bg-black text-white border-gray-700">
-                      <SelectItem value="pending" className="focus:bg-gray-800 focus:text-white">
-                        Pending
-                      </SelectItem>
-                      <SelectItem value="paid" className="focus:bg-gray-800 focus:text-white">
-                        Paid
-                      </SelectItem>
-                      <SelectItem value="overdue" className="focus:bg-gray-800 focus:text-white">
-                        Overdue
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="border-t pt-4 space-y-2">
-                <div className="flex justify-between text-sm md:text-base text-muted-foreground">
-                  <span>Subtotal:</span>
-                  <span className="font-medium text-foreground">₹{formatCurrency(subtotal)}</span>
-                </div>
-                {manualAmount > 0 && (
-                  <div className="flex justify-between text-sm md:text-base text-muted-foreground">
-                    <span>{manualLabel}:</span>
-                    <span className="font-medium text-foreground">₹{formatCurrency(manualAmount)}</span>
-                  </div>
-                )}
-
-                <div className="flex justify-between text-sm md:text-base text-muted-foreground">
-                  <span>GST Amount:</span>
-                  <span className="font-medium text-foreground">₹{formatCurrency(gstAmount)}</span>
-                </div>
-                <div className="flex justify-between text-sm md:text-base text-muted-foreground">
-                  <span>Discount:</span>
-                  <span className="font-medium text-foreground">-₹{formatCurrency(discount)}</span>
-                </div>
-                <div className="flex justify-between text-base md:text-lg font-bold border-t pt-3 mt-2">
-                  <span>Total:</span>
-                  <span>₹{formatCurrency(total)}</span>
-                </div>
-              </div>
-
-              <Button className="w-full" size="lg" onClick={handleCreateInvoice} disabled={loading}>
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  "Create Invoice"
-                )}
-              </Button>
-            </CardContent>
-          </Card>
+                <Button
+                  className="w-full mt-6 h-12 rounded-xl shadow-lg shadow-primary/20"
+                  onClick={handleCreateInvoice}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Creating...
+                    </>
+                  ) : (
+                    "Create Invoice"
+                  )}
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       )}
 
@@ -1063,7 +1449,7 @@ export default function Invoice() {
               placeholder="Search by invoice number, customer name, or phone..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9"
+              className="pl-9 h-11 rounded-xl"
             />
           </div>
 
@@ -1074,20 +1460,20 @@ export default function Invoice() {
                 setStatusFilter(v)
               }}
             >
-              <SelectTrigger className="bg-black text-white border-gray-700">
+              <SelectTrigger className="h-11 rounded-xl">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
-              <SelectContent className="bg-black text-white border-gray-700">
-                <SelectItem value="paid" className="focus:bg-gray-800">
+              <SelectContent className="bg-popover text-popover-foreground border-border shadow-md rounded-xl">
+                <SelectItem value="paid" className="focus:bg-accent focus:text-accent-foreground">
                   Paid
                 </SelectItem>
-                <SelectItem value="overdue" className="focus:bg-gray-800">
+                <SelectItem value="overdue" className="focus:bg-accent focus:text-accent-foreground">
                   Overdue
                 </SelectItem>
-                <SelectItem value="Pending" className="focus:bg-gray-800">
+                <SelectItem value="pending" className="focus:bg-accent focus:text-accent-foreground">
                   Pending
                 </SelectItem>
-                <SelectItem value="cancelled" className="focus:bg-gray-800">
+                <SelectItem value="cancelled" className="focus:bg-accent focus:text-accent-foreground">
                   Cancelled
                 </SelectItem>
               </SelectContent>
@@ -1099,14 +1485,14 @@ export default function Invoice() {
                 setRangeFilter(v)
               }}
             >
-              <SelectTrigger className="bg-black text-white border-gray-700">
+              <SelectTrigger className="h-11 rounded-xl">
                 <SelectValue placeholder="Date Range" />
               </SelectTrigger>
-              <SelectContent className="bg-black text-white border-gray-700">
-                <SelectItem value="last10" className="focus:bg-gray-800">
+              <SelectContent className="bg-popover text-popover-foreground border-border shadow-md rounded-xl">
+                <SelectItem value="last10" className="focus:bg-accent focus:text-accent-foreground">
                   Last 10 Days
                 </SelectItem>
-                <SelectItem value="last30" className="focus:bg-gray-800">
+                <SelectItem value="last30" className="focus:bg-accent focus:text-accent-foreground">
                   Last 30 Days
                 </SelectItem>
               </SelectContent>
@@ -1119,8 +1505,7 @@ export default function Invoice() {
                 setPage(1)
                 setMonthFilter(e.target.value)
               }}
-              className="bg-black text-white border-gray-700
-             col-span-1 sm:col-span-2 md:col-span-1"
+              className="h-11 rounded-xl col-span-1 sm:col-span-2 md:col-span-1"
             />
           </div>
 
@@ -1134,26 +1519,26 @@ export default function Invoice() {
                 <table className="w-full border-collapse">
                   <thead>
                     <tr className="border-b text-sm text-muted-foreground">
-                      <th className="p-2 text-left">Invoice #</th>
-                      <th className="p-2 text-left">Date</th>
-                      <th className="p-2 text-left">Customer</th>
-                      <th className="p-2 text-left">Phone</th>
-                      <th className="p-2 text-right">Total</th>
-                      <th className="p-2 text-left">Status</th>
-                      <th className="p-2 text-right">Actions</th>
+                      <th className="p-3 text-left">Invoice #</th>
+                      <th className="p-3 text-left">Date</th>
+                      <th className="p-3 text-left">Customer</th>
+                      <th className="p-3 text-left">Phone</th>
+                      <th className="p-3 text-right">Total</th>
+                      <th className="p-3 text-left">Status</th>
+                      <th className="p-3 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredInvoices
                       .filter((inv) => inv && inv.id)
                       .map((inv) => (
-                        <tr key={inv.id} className="border-b hover:bg-muted/40">
-                          <td className="p-2 font-mono text-sm">{inv.invoice_number}</td>
-                          <td className="p-2 text-sm">{new Date(inv.created_at).toLocaleDateString()}</td>
-                          <td className="p-2 font-medium">{inv.customer_name}</td>
-                          <td className="p-2 text-sm">{inv.customer_phone || "N/A"}</td>
-                          <td className="p-2 text-right font-semibold">₹{formatCurrency(inv.total)}</td>
-                          <td className="p-2">
+                        <tr key={inv.id} className="border-b hover:bg-muted/40 transition-colors">
+                          <td className="p-3 font-mono text-sm">{inv.invoice_number}</td>
+                          <td className="p-3 text-sm">{new Date(inv.created_at).toLocaleDateString()}</td>
+                          <td className="p-3 font-medium">{inv.customer_name}</td>
+                          <td className="p-3 text-sm">{inv.customer_phone || "N/A"}</td>
+                          <td className="p-3 text-right font-semibold">₹{formatCurrency(inv.total)}</td>
+                          <td className="p-3">
                             <Select
                               value={inv.payment_status || "pending"}
                               onValueChange={(v) => {
@@ -1163,35 +1548,53 @@ export default function Invoice() {
                                 )
                               }}
                             >
-                              <SelectTrigger className="w-32 bg-black text-white border-gray-700">
+                              <SelectTrigger className="w-36 bg-black text-white border-gray-700 rounded-lg">
                                 <SelectValue placeholder="Status" />
                               </SelectTrigger>
 
-                              <SelectContent className="bg-black text-white border-gray-700">
-                                <SelectItem value="pending" className="focus:bg-gray-800">
+                              <SelectContent className="bg-popover text-popover-foreground border-border shadow-md rounded-xl">
+                                <SelectItem value="pending" className="focus:bg-accent focus:text-accent-foreground">
                                   Pending
                                 </SelectItem>
-                                <SelectItem value="paid" className="focus:bg-gray-800">
+                                <SelectItem value="paid" className="focus:bg-accent focus:text-accent-foreground">
                                   Paid
                                 </SelectItem>
-                                <SelectItem value="overdue" className="focus:bg-gray-800">
+                                <SelectItem value="overdue" className="focus:bg-accent focus:text-accent-foreground">
                                   Overdue
                                 </SelectItem>
-                                <SelectItem value="cancelled" className="focus:bg-gray-800">
+                                <SelectItem value="cancelled" className="focus:bg-accent focus:text-accent-foreground">
                                   Cancelled
                                 </SelectItem>
                               </SelectContent>
                             </Select>
                           </td>
 
-                          <td className="p-2 text-right">
+                          <td className="p-3 text-right">
                             <div className="flex items-center justify-end gap-2">
-                              <Button size="sm" variant="outline" onClick={() => setViewInvoice(inv)}>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setViewInvoice(inv)}
+                                className="rounded-lg"
+                              >
                                 <Eye className="w-4 h-4 mr-1" /> View
                               </Button>
-                              <Button size="sm" variant="outline" onClick={() => generatePDF(inv)}>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => generatePDF(inv)}
+                                className="rounded-lg"
+                              >
                                 <Download className="w-4 h-4 mr-1" /> PDF
                               </Button>
+                              {/* <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => shareInvoice(inv)}
+                                className="rounded-lg"
+                              >
+                                <Share2 className="w-4 h-4 mr-1" /> Share
+                              </Button> */}
                             </div>
                           </td>
                         </tr>
@@ -1205,7 +1608,7 @@ export default function Invoice() {
                 {filteredInvoices
                   .filter((inv) => inv && inv.id)
                   .map((inv) => (
-                    <Card key={inv.id} className="border shadow-sm hover:shadow-md transition-shadow">
+                    <Card key={inv.id} className="border shadow-sm hover:shadow-md transition-shadow rounded-xl">
                       <CardContent className="p-4 space-y-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="space-y-1 min-w-0 flex-1">
@@ -1225,7 +1628,9 @@ export default function Invoice() {
                         </div>
 
                         <div className="space-y-2 border-t pt-3">
-                          <Label className="text-xs font-medium">Payment Status</Label>
+                          <Label className="text-xs font-medium uppercase tracking-wider text-muted-foreground block">
+                            Payment Status
+                          </Label>
                           <Select
                             value={inv.payment_status || "pending"}
                             onValueChange={(v) => {
@@ -1235,21 +1640,21 @@ export default function Invoice() {
                               )
                             }}
                           >
-                            <SelectTrigger>
+                            <SelectTrigger className="rounded-lg">
                               <SelectValue placeholder="Status" />
                             </SelectTrigger>
 
-                            <SelectContent className="bg-black text-white border-gray-700">
-                              <SelectItem value="pending" className="focus:bg-gray-800">
+                            <SelectContent className="bg-popover text-popover-foreground border-border shadow-md rounded-xl">
+                              <SelectItem value="pending" className="focus:bg-accent focus:text-accent-foreground">
                                 Pending
                               </SelectItem>
-                              <SelectItem value="paid" className="focus:bg-gray-800">
+                              <SelectItem value="paid" className="focus:bg-accent focus:text-accent-foreground">
                                 Paid
                               </SelectItem>
-                              <SelectItem value="overdue" className="focus:bg-gray-800">
+                              <SelectItem value="overdue" className="focus:bg-accent focus:text-accent-foreground">
                                 Overdue
                               </SelectItem>
-                              <SelectItem value="cancelled" className="focus:bg-gray-800">
+                              <SelectItem value="cancelled" className="focus:bg-accent focus:text-accent-foreground">
                                 Cancelled
                               </SelectItem>
                             </SelectContent>
@@ -1257,11 +1662,29 @@ export default function Invoice() {
                         </div>
 
                         <div className="flex gap-2 pt-2 border-t">
-                          <Button size="sm" variant="outline" onClick={() => setViewInvoice(inv)} className="flex-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setViewInvoice(inv)}
+                            className="flex-1 rounded-lg"
+                          >
                             <Eye className="w-4 h-4 mr-2" /> View
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => generatePDF(inv)} className="flex-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => generatePDF(inv)}
+                            className="flex-1 rounded-lg"
+                          >
                             <Download className="w-4 h-4 mr-2" /> PDF
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => shareInvoice(inv)}
+                            className="flex-1 rounded-lg"
+                          >
+                            <Share2 className="w-4 h-4 mr-2" /> Share
                           </Button>
                         </div>
                       </CardContent>
@@ -1281,7 +1704,7 @@ export default function Invoice() {
                   variant="outline"
                   disabled={page === 1}
                   onClick={() => setPage(page - 1)}
-                  className="w-full sm:w-auto"
+                  className="w-full sm:w-auto rounded-lg"
                   size="sm"
                 >
                   Previous
@@ -1295,7 +1718,7 @@ export default function Invoice() {
                   variant="outline"
                   disabled={page === pagination.total_pages}
                   onClick={() => setPage(page + 1)}
-                  className="w-full sm:w-auto"
+                  className="w-full sm:w-auto rounded-lg"
                   size="sm"
                 >
                   Next
@@ -1308,48 +1731,50 @@ export default function Invoice() {
 
       {viewInvoice && (
         <Dialog open={!!viewInvoice} onOpenChange={() => setViewInvoice(null)}>
-          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle className="text-lg md:text-xl">Invoice Details - {viewInvoice.invoice_number}</DialogTitle>
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto rounded-3xl p-0">
+            <DialogHeader className="bg-primary p-6 text-primary-foreground">
+              <DialogTitle className="text-xl font-bold flex items-center gap-2">
+                <FileText className="w-5 h-5" /> Invoice Details
+              </DialogTitle>
+              <p className="text-primary-foreground/80 text-sm mt-1">Invoice #{viewInvoice.invoice_number}</p>
             </DialogHeader>
-            <div className="space-y-4">
+            <div className="p-6 space-y-6">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <p className="text-xs text-muted-foreground">Customer Name</p>
-                  <p className="font-medium mt-1">{viewInvoice.customer_name}</p>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Customer Name</p>
+                  <p className="font-medium mt-1 text-base">{viewInvoice.customer_name}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Phone</p>
-                  <p className="font-medium mt-1">{viewInvoice.customer_phone || "N/A"}</p>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Phone</p>
+                  <p className="font-medium mt-1 text-base">{viewInvoice.customer_phone || "N/A"}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Date</p>
-                  <p className="font-medium mt-1">{new Date(viewInvoice.created_at).toLocaleDateString()}</p>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Date</p>
+                  <p className="font-medium mt-1 text-base">{new Date(viewInvoice.created_at).toLocaleDateString()}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Payment Status</p>
-                  <p className="font-medium mt-1 capitalize">{viewInvoice.payment_status}</p>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Payment Status</p>
+                  <p className="font-medium mt-1 capitalize text-base">{viewInvoice.payment_status}</p>
                 </div>
               </div>
 
-              <div className="border rounded-lg p-3 md:p-4">
-                <h4 className="font-semibold mb-3 text-sm md:text-base">Items</h4>
+              <div className="border rounded-lg p-4">
+                <h4 className="font-bold mb-3 text-sm uppercase tracking-wider text-muted-foreground">Items</h4>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-xs md:text-sm">
+                  <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b">
-                        <th className="text-left p-2">Product</th>
-                        <th className="text-right p-2">Qty</th>
-                        <th className="text-right p-2">Price</th>
-                        <th className="text-right p-2">Total</th>
+                      <tr className="border-b text-muted-foreground text-xs uppercase tracking-wider">
+                        <th className="p-2 text-left">Product</th>
+                        <th className="p-2 text-right">Qty</th>
+                        <th className="p-2 text-right">Price</th>
+                        <th className="p-2 text-right">Total</th>
                       </tr>
                     </thead>
                     <tbody>
                       {viewInvoice.items.map((item, idx) => (
                         <tr key={idx} className="border-b">
-                          <td className="p-2">
+                          <td className="p-2 align-top">
                             <div className="font-medium">{item.product_name}</div>
-                            {/* Updated View Invoice item list to display color and size from top level or variant_info */}
                             {(item.color || item.size || item.v_sku || item.variant_info) && (
                               <div className="text-[10px] text-muted-foreground flex flex-wrap gap-x-2 mt-0.5">
                                 {(item.color || item.variant_info?.color) && (
@@ -1365,18 +1790,17 @@ export default function Invoice() {
                                 )}
                               </div>
                             )}
-                            {/* </CHANGE> */}
                           </td>
-                          <td className="text-right p-2">{item.quantity}</td>
-                          <td className="text-right p-2">₹{formatCurrency(item.price)}</td>
-                          <td className="text-right p-2 font-semibold">₹{formatCurrency(item.total)}</td>
+                          <td className="text-right p-2 align-top">{item.quantity}</td>
+                          <td className="text-right p-2 align-top">₹{formatCurrency(item.price)}</td>
+                          <td className="text-right p-2 align-top font-semibold">₹{formatCurrency(item.total)}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
 
-                <div className="mt-4 space-y-2 text-xs md:text-sm">
+                <div className="mt-4 space-y-2 text-sm">
                   <div className="flex justify-between text-muted-foreground">
                     <span>Subtotal:</span>
                     <span className="font-medium text-foreground">₹{formatCurrency(viewInvoice.subtotal)}</span>
@@ -1389,14 +1813,17 @@ export default function Invoice() {
                     <span>Discount:</span>
                     <span className="font-medium text-foreground">-₹{formatCurrency(viewInvoice.discount)}</span>
                   </div>
-                  <div className="flex justify-between font-bold text-base md:text-lg border-t pt-2 mt-2">
+                  <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
                     <span>Total:</span>
                     <span>₹{formatCurrency(viewInvoice.total)}</span>
                   </div>
                 </div>
               </div>
 
-              <Button className="w-full" onClick={() => generatePDF(viewInvoice)}>
+              <Button
+                className="w-full h-12 rounded-xl shadow-lg shadow-primary/20"
+                onClick={() => generatePDF(viewInvoice)}
+              >
                 <Download className="w-4 h-4 mr-2" />
                 Download PDF
               </Button>
@@ -1404,6 +1831,68 @@ export default function Invoice() {
           </DialogContent>
         </Dialog>
       )}
+
+      <Dialog open={showVariantDialog} onOpenChange={setShowVariantDialog}>
+        <DialogContent className="sm:max-w-[500px] rounded-3xl overflow-hidden p-0 border-none shadow-2xl">
+          <DialogHeader className="bg-primary p-6 text-primary-foreground">
+            <DialogTitle className="text-xl font-bold flex items-center gap-2">Select Variant</DialogTitle>
+            <p className="text-primary-foreground/80 text-sm mt-1">
+              {selectedProductForVariant?.name} has multiple options. Please select one.
+            </p>
+          </DialogHeader>
+
+          <div className="p-6 max-h-[60vh] overflow-auto">
+            <div className="grid grid-cols-1 gap-3">
+              {selectedProductForVariant?.variants?.map((variant) => (
+                <button
+                  key={variant.v_sku}
+                  onClick={() => addSelectedProductToInvoice(selectedProductForVariant, variant)}
+                  className="flex items-center gap-4 p-4 rounded-2xl border bg-card hover:border-primary hover:shadow-lg transition-all text-left group"
+                >
+                  <div className="w-16 h-16 rounded-xl bg-muted border overflow-hidden flex-shrink-0">
+                    <img
+                      src={
+                        variant.image_url ||
+                        variant.v_image_url ||
+                        selectedProductForVariant.images?.[0] ||
+                        "/placeholder.png" ||
+                        "/placeholder.svg" ||
+                        "/placeholder.svg"
+                      }
+                      alt={variant.variant_name}
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-sm">
+                      {variant.variant_name ||
+                        `${variant.color || ""} ${variant.size || ""}`.trim() ||
+                        "Default Variant"}
+                    </p>
+                    <p className="text-xs text-muted-foreground font-mono mt-0.5">{variant.v_sku}</p>
+                    <div className="flex items-center gap-3 mt-2">
+                      <span className="text-primary font-bold">
+                        ₹{variant.v_selling_price || selectedProductForVariant.selling_price}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                        Stock: {variant.stock}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="w-10 h-10 rounded-full bg-primary/5 flex items-center justify-center text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+                    <Plus className="w-5 h-5" />
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+          <DialogFooter className="p-4 bg-muted/30 border-t flex justify-end">
+            <Button variant="ghost" onClick={() => setShowVariantDialog(false)} className="rounded-xl">
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -1,20 +1,51 @@
 "use client"
 
+import { RefreshCw } from "lucide-react"
+
 import { useState, useEffect, useMemo } from "react"
 import axios from "axios"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "sonner"
-import { Plus, Edit, Trash2, Search } from "lucide-react"
-import { QrCode } from "lucide-react"
+import { Plus, Edit, Trash2, Search, QrCode, Camera, X, ImageIcon } from "lucide-react"
+import imageCompression from "browser-image-compression"
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`
 
+export const compressImage = async (file) => {
+  const options = {
+    maxSizeMB: 0.25,              // ⬅️ even safer (250 KB)
+    maxWidthOrHeight: 1024,       // ⬅️ force smaller
+    useWebWorker: true,
+    fileType: "image/jpeg",
+    initialQuality: 0.7,          // ⬅️ important
+    exifOrientation: 1,           // ⬅️ FORCE FIX ROTATION
+  }
+
+  try {
+    const compressedFile = await imageCompression(file, options)
+    return compressedFile
+  } catch (err) {
+    console.error("Image compression failed", err)
+    return file
+  }
+}
+
+
 const Products = () => {
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768)
+    checkMobile()
+    window.addEventListener("resize", checkMobile)
+    return () => window.removeEventListener("resize", checkMobile)
+  }, [])
+
   const user = JSON.parse(localStorage.getItem("user") || "{}")
   const role = user?.role
 
@@ -22,6 +53,7 @@ const Products = () => {
   const [categories, setCategories] = useState([])
   const [open, setOpen] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
+const [savingProduct, setSavingProduct] = useState(false)
 
   const [search, setSearch] = useState("")
   const [categoryFilter, setCategoryFilter] = useState("all")
@@ -30,9 +62,11 @@ const Products = () => {
   const [imagePreviews, setImagePreviews] = useState([])
   const [variantOpen, setVariantOpen] = useState(false)
   const [selectedProduct, setSelectedProduct] = useState(null)
+const [refreshing, setRefreshing] = useState(false)
 
-  const [variants, setVariants] = useState([]) // Default to empty array for optional variants
-
+  const [variants, setVariants] = useState([
+    { v_sku: "", variant_name: "", color: "", size: "", stock: 0, image_url: "" },
+  ])
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -40,17 +74,13 @@ const Products = () => {
     cost_price: "",
     min_selling_price: "",
     selling_price: "",
-    stock: "0", // Added stock field for base product
+    stock: "0",
     min_stock: "",
     sku: "",
     images: [],
   })
 
-  // ================================
-  // STEP 1: Detect Services Category
-  // ================================
   const servicesCategory = categories.find((c) => c.name.toLowerCase() === "services")
-
   const isServiceSelected = !!servicesCategory && formData.category_id === servicesCategory.id
 
   useEffect(() => {
@@ -58,7 +88,6 @@ const Products = () => {
     if (token) {
       axios.defaults.headers.common["Authorization"] = `Bearer ${token}`
     }
-
     fetchProducts()
     fetchCategories()
   }, [])
@@ -71,82 +100,17 @@ const Products = () => {
       toast.error("Failed to load products")
     }
   }
-
-  const removeImage = (index) => {
-    const updatedImages = formData.images.filter((_, i) => i !== index)
-
-    setFormData((prev) => ({
-      ...prev,
-      images: updatedImages,
-    }))
-
-    setImagePreviews(updatedImages)
+const handleRefresh = async () => {
+  try {
+    setRefreshing(true)
+    await fetchProducts()
+    toast.success("Products refreshed")
+  } catch {
+    toast.error("Failed to refresh products")
+  } finally {
+    setRefreshing(false)
   }
-
-  const handleImageUpload = async (file) => {
-    if (!file) return
-
-    if (formData.images.length >= 5) {
-      toast.error("Maximum 5 images allowed")
-      return
-    }
-
-    const token = localStorage.getItem("token")
-    const formDataUpload = new FormData()
-    formDataUpload.append("file", file)
-
-    try {
-      setUploading(true)
-
-      const res = await axios.post(`${API}/upload/product-image`, formDataUpload, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-          Authorization: `Bearer ${token}`,
-        },
-      })
-
-      setFormData((prev) => {
-        const newImages = [...prev.images, res.data.url].slice(0, 5)
-        return {
-          ...prev,
-          images: newImages,
-        }
-      })
-
-      setImagePreviews((prev) => [...prev, res.data.url].slice(0, 5))
-
-      toast.success("Image uploaded")
-    } catch {
-      toast.error("Image upload failed")
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  const handleVariantImageUpload = async (file, index) => {
-    if (!file) return
-
-    const token = localStorage.getItem("token")
-    const formDataUpload = new FormData()
-    formDataUpload.append("file", file)
-
-    try {
-      const res = await axios.post(`${API}/upload/variant-image`, formDataUpload, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-          Authorization: `Bearer ${token}`,
-        },
-      })
-
-      const copy = [...variants]
-      copy[index].image_url = res.data.url
-      setVariants(copy)
-
-      toast.success("Variant image uploaded")
-    } catch {
-      toast.error("Variant image upload failed")
-    }
-  }
+}
 
   const fetchCategories = async () => {
     try {
@@ -156,10 +120,100 @@ const Products = () => {
       toast.error("Failed to load categories")
     }
   }
+  const handleImageUpload = async (file) => {
+    if (!file) return
+
+    if (formData.images.length >= 5) {
+      toast.error("Maximum 5 images allowed")
+      return
+    }
+
+    if (!file.type.startsWith("image/")) {
+      toast.error("Only image files allowed")
+      return
+    }
+
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error("Image too large (max 15MB)")
+      return
+    }
+
+    const token = localStorage.getItem("token")
+    const compressed = await compressImage(file)
+
+    const formDataUpload = new FormData()
+    formDataUpload.append("file", compressed)
+
+    try {
+      setUploading(true)
+
+      const res = await axios.post(
+        `${API}/upload/product-image`,
+        formDataUpload,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`, // ✅ NO Content-Type
+          },
+        }
+      )
+
+      setFormData((prev) => ({
+        ...prev,
+        images: [...prev.images, res.data.url].slice(0, 5),
+      }))
+      setImagePreviews((prev) => [...prev, res.data.url].slice(0, 5))
+
+      toast.success("Image uploaded")
+    } catch (err) {
+      console.error(err)
+      toast.error("Image upload failed")
+    } finally {
+      setUploading(false)
+    }
+  }
+  const handleVariantImageUpload = async (file, index) => {
+    if (!file) return
+
+    if (!file.type.startsWith("image/")) {
+      toast.error("Only image files allowed")
+      return
+    }
+
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error("Image too large (max 15MB)")
+      return
+    }
+
+    const token = localStorage.getItem("token")
+    const compressed = await compressImage(file)
+
+    const formDataUpload = new FormData()
+    formDataUpload.append("file", compressed)
+
+    try {
+      const res = await axios.post(
+        `${API}/upload/variant-image`,
+        formDataUpload,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`, // ✅ NO Content-Type
+          },
+        }
+      )
+
+      const copy = [...variants]
+      copy[index].image_url = res.data.url
+      setVariants(copy)
+
+      toast.success("Variant image uploaded")
+    } catch (err) {
+      console.error(err)
+      toast.error("Variant image upload failed")
+    }
+  }
 
   const filteredProducts = useMemo(() => {
     let data = [...products]
-
     if (search.trim()) {
       const q = search.toLowerCase()
       data = data.filter(
@@ -170,92 +224,59 @@ const Products = () => {
           p.category_name?.toLowerCase().includes(q),
       )
     }
-
-    if (categoryFilter !== "all") {
-      data = data.filter((p) => p.category_id === categoryFilter)
-    }
-
-    if (priceSort === "low-high") {
-      data.sort((a, b) => a.selling_price - b.selling_price)
-    } else if (priceSort === "high-low") {
-      data.sort((a, b) => b.selling_price - a.selling_price)
-    } else {
-      data.sort((a, b) => a.name.localeCompare(b.name))
-    }
-
+    if (categoryFilter !== "all") data = data.filter((p) => p.category_id === categoryFilter)
+    if (priceSort === "low-high") data.sort((a, b) => a.selling_price - b.selling_price)
+    else if (priceSort === "high-low") data.sort((a, b) => b.selling_price - a.selling_price)
+    else data.sort((a, b) => a.name.localeCompare(b.name))
     return data
   }, [products, search, categoryFilter, priceSort])
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
+ const handleSubmit = async (e) => {
+  e.preventDefault()
+  setSavingProduct(true) // ⬅️ START LOADING
 
-    const hasValidVariants = variants.some((v) => v.v_sku && v.v_sku.trim() !== "")
+  const hasValidVariants = variants.some((v) => v.v_sku && v.v_sku.trim() !== "")
+  const finalVariants =
+    isServiceSelected || !hasValidVariants
+      ? []
+      : variants
+          .filter((v) => v.v_sku && v.v_sku.trim() !== "")
+          .map((v) => ({ ...v, stock: Number(v.stock || 0) }))
 
-    const finalVariants =
-      isServiceSelected || !hasValidVariants
-        ? []
-        : variants
-            .filter((v) => v.v_sku && v.v_sku.trim() !== "")
-            .map((v) => ({
-              v_sku: v.v_sku || "",
-              variant_name: v.variant_name || null,
-              color: v.color || null,
-              size: v.size || null,
-              stock: Number.parseInt(v.stock || 0),
-              image_url: v.image_url || null,
-              qr_code_url: null,
-            }))
-
-    const payload = {
-      name: formData.name,
-      description: formData.description || null,
-      category_id: formData.category_id,
-
-      cost_price: Number.parseFloat(formData.cost_price || 0),
-      selling_price: Number.parseFloat(formData.selling_price || 0),
-      min_selling_price: Number.parseFloat(formData.min_selling_price || 0),
-
-      min_stock: isServiceSelected ? 0 : Number.parseInt(formData.min_stock || 0),
-      sku: formData.sku || "",
-      images: formData.images || [],
-
-      is_service: isServiceSelected ? 1 : 0,
-      variants: finalVariants,
-      qr_code_url: null, // Added to match backend schema expectations
-    }
-
-    try {
-      if (editingProduct) {
-        await axios.put(`${API}/products/${editingProduct.id}`, payload)
-        toast.success("Product updated successfully")
-      } else {
-        await axios.post(`${API}/products`, payload)
-        toast.success("Product created successfully")
-      }
-
-      fetchProducts()
-      resetForm()
-      setVariants([
-        {
-          v_sku: "",
-          variant_name: "",
-          color: "",
-          size: "",
-          stock: 0,
-          image_url: "",
-        },
-      ])
-      setOpen(false)
-    } catch (err) {
-      toast.error(err.response?.data?.detail || "Failed to save product")
-    }
+  const payload = {
+    ...formData,
+    description: formData.description || null,
+    cost_price: Number(formData.cost_price || 0),
+    selling_price: Number(formData.selling_price || 0),
+    min_selling_price: Number(formData.min_selling_price || 0),
+    min_stock: isServiceSelected ? 0 : Number(formData.min_stock || 0),
+    is_service: isServiceSelected ? 1 : 0,
+    variants: finalVariants,
+    qr_code_url: null,
   }
+
+  try {
+    if (editingProduct) {
+      await axios.put(`${API}/products/${editingProduct.id}`, payload)
+    } else {
+      await axios.post(`${API}/products`, payload)
+    }
+
+    toast.success(editingProduct ? "Product updated" : "Product created")
+    fetchProducts()
+    resetForm()
+    setOpen(false)
+  } catch (err) {
+    toast.error(err.response?.data?.detail || "Failed to save product")
+  } finally {
+    setSavingProduct(false) // ⬅️ STOP LOADING
+  }
+}
+
 
   const handleEdit = (product) => {
     setEditingProduct(product)
-
-    const isService = product.is_service === 1 || product.category_name?.toLowerCase() === "services"
-
+    const isService = product.is_service === 1
     setFormData({
       name: product.name || "",
       description: product.description || "",
@@ -268,39 +289,17 @@ const Products = () => {
       images: Array.isArray(product.images) ? product.images : [],
       cost_price: role === "admin" ? product.cost_price?.toString() || "" : "",
     })
-
-    if (!isService && Array.isArray(product.variants)) {
-      setVariants(
-        product.variants.map((v) => ({
-          v_sku: v.v_sku || "",
-          variant_name: v.variant_name || "",
-          color: v.color || "",
-          size: v.size || "",
-          stock: Number(v.stock) || 0,
-          image_url: v.image_url || "",
-          qr_code_url: v.qr_code_url || null,
-        })),
-      )
-    } else {
-      setVariants([
-        {
-          v_sku: "",
-          variant_name: "",
-          color: "",
-          size: "",
-          stock: 0,
-          image_url: "",
-        },
-      ])
-    }
-
+    setVariants(
+      product.variants?.length
+        ? product.variants.map((v) => ({ ...v, stock: Number(v.stock) }))
+        : [{ v_sku: "", variant_name: "", color: "", size: "", stock: 0, image_url: "" }],
+    )
     setImagePreviews(Array.isArray(product.images) ? product.images : [])
     setOpen(true)
   }
 
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this product?")) return
-
     try {
       await axios.delete(`${API}/products/${id}`)
       toast.success("Product deleted")
@@ -313,7 +312,6 @@ const Products = () => {
   const resetForm = () => {
     setEditingProduct(null)
     setImagePreviews([])
-
     setFormData({
       name: "",
       description: "",
@@ -321,659 +319,831 @@ const Products = () => {
       cost_price: "",
       min_selling_price: "",
       selling_price: "",
-      stock: "0", // Reset stock to default value
+      stock: "0",
       min_stock: "",
       sku: "",
       images: [],
     })
+    setVariants([{ v_sku: "", variant_name: "", color: "", size: "", stock: 0, image_url: "" }])
+  }
+
+  const removeImage = (index) => {
+    const updated = formData.images.filter((_, i) => i !== index)
+    setFormData((prev) => ({ ...prev, images: updated }))
+    setImagePreviews(updated)
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6 bg-background min-h-screen">
       {/* HEADER */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-4xl font-bold">Products</h1>
-          <p className="text-muted-foreground">Manage your product inventory</p>
+          <h1 className="text-2xl sm:text-4xl font-bold tracking-tight">Products</h1>
+          <p className="text-muted-foreground text-sm sm:text-base">Manage your inventory</p>
         </div>
 
         {role === "admin" && (
-          <Dialog
-            open={open}
-            onOpenChange={(v) => {
-              setOpen(v)
-              if (!v) resetForm()
-            }}
-          >
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Product
-              </Button>
-            </DialogTrigger>
+          <div className="flex items-center gap-2">
+      {/* 🔄 Refresh Button (OUTSIDE Dialog) */}
+      <Button
+  variant="outline"
+  size={isMobile ? "sm" : "default"}
+  onClick={handleRefresh}
+  disabled={refreshing}
+  className="rounded-full flex items-center gap-2"
+  title="Refresh products"
+>
+  <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+  <span className="hidden sm:inline">
+    {refreshing ? "Refreshing..." : "Refresh"}
+  </span>
+</Button>
 
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{editingProduct ? "Edit Product" : "Add Product"}</DialogTitle>
+      {/* ➕ Add Product Dialog */}
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          setOpen(v)
+          if (!v) resetForm()
+        }}
+      >
+        <DialogTrigger asChild>
+          <Button size={isMobile ? "sm" : "default"} className="rounded-full px-6">
+            <Plus className="w-4 h-4 mr-2" />
+            {isMobile ? "Add" : "Add Product"}
+          </Button>
+        </DialogTrigger>
+
+        {/* ⬇️ KEEP EVERYTHING BELOW EXACTLY SAME */}
+        <DialogContent
+        className={`${
+          isMobile
+            ? "w-full h-[100dvh] max-w-none m-0 rounded-none flex flex-col p-0 overflow-hidden"
+            : "max-w-2xl max-h-[90vh] overflow-y-auto"
+        }`}
+      >
+              <DialogHeader
+                className={isMobile ? "p-4 border-b flex flex-row items-center justify-between space-y-0" : ""}
+              >
+                <DialogTitle className="text-xl font-bold">
+                  {editingProduct ? "Edit Product" : "Add Product"}
+                </DialogTitle>
+                {isMobile && (
+                  <DialogClose className="rounded-full p-2 hover:bg-muted transition-colors">
+                    <X className="h-5 w-5" />
+                  </DialogClose>
+                )}
               </DialogHeader>
 
-              <form onSubmit={handleSubmit} className="space-y-4">
-                {/* BASIC */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Product Name</Label>
-                    <Input
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <Label>SKU</Label>
-                    <Input
-                      value={formData.sku}
-                      onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <Label>Description</Label>
-                  <Input
-                    value={formData.description}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        description: e.target.value,
-                      })
-                    }
-                  />
-                </div>
-
-                <div>
-                  <Label>Category</Label>
-                  <Select
-                    value={formData.category_id}
-                    onValueChange={(v) => {
-                      const selectedCategory = categories.find((c) => c.id === v)
-                      const isService = selectedCategory?.name?.toLowerCase() === "services"
-
-                      setFormData({
-                        ...formData,
-                        category_id: v,
-                        stock: isService ? "0" : formData.stock,
-                        min_stock: isService ? "0" : formData.min_stock,
-                      })
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select category" />
-                    </SelectTrigger>
-
-                    <SelectContent className="bg-black text-white border border-gray-700">
-                      {categories.map((c) => (
-                        <SelectItem
-                          key={c.id}
-                          value={c.id}
-                          className="focus:bg-gray-800 data-[state=checked]:bg-gray-700"
-                        >
-                          {c.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* PRODUCT IMAGE */}
-                <div className="space-y-2">
-                  <Label>Product Image</Label>
-
-                  <div className="flex gap-3 items-center">
-                    <Input
-                      type="file"
-                      accept="image/*"
-                      disabled={uploading || formData.images.length >= 5}
-                      onChange={(e) => handleImageUpload(e.target.files[0])}
-                    />
-                  </div>
-
-                  {uploading && <p className="text-sm text-muted-foreground">Uploading image…</p>}
-
-                  <div className="flex gap-2 flex-wrap">
-                    {imagePreviews.map((img, index) => (
-                      <div key={index} className="relative group">
-                        <img
-                          src={img || "/placeholder.svg"}
-                          className={`w-24 h-24 object-cover rounded border ${
-                            index === 0 ? "ring-2 ring-green-500" : ""
-                          }`}
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() => removeImage(index)}
-                          className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-5 h-5 text-xs hidden group-hover:flex items-center justify-center"
-                        >
-                          ✕
-                        </button>
-
-                        {index === 0 && (
-                          <span className="absolute bottom-1 left-1 bg-green-600 text-white text-xs px-1 rounded">
-                            Main
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* PRICING */}
-                <div className="grid grid-cols-2 gap-4">
-                  {role === "admin" && (
-                    <div>
-                      <Label>Cost Price</Label>
+              <form onSubmit={handleSubmit} className="flex flex-col h-full overflow-hidden">
+                <div className={`flex-1 overflow-y-auto p-4 space-y-6 ${isMobile ? "pb-32" : ""}`}>
+                  {/* BASIC INFO */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
+                        Product Name
+                      </Label>
                       <Input
-                        type="number"
-                        value={formData.cost_price}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            cost_price: e.target.value,
-                          })
-                        }
+                        value={formData.name}
+                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                         required
+                        className="bg-muted/30 border-muted focus-visible:ring-primary h-12"
+                        placeholder="Enter product name"
                       />
                     </div>
-                  )}
+                    <div className="space-y-2">
+                      <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">SKU</Label>
+                      <Input
+                        value={formData.sku}
+                        onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
+                        required
+                        className="bg-muted/30 border-muted focus-visible:ring-primary h-12"
+                        placeholder="Enter SKU"
+                      />
+                    </div>
+                  </div>
 
-                  <div>
-                    <Label>Minimum Selling Price</Label>
+                  <div className="space-y-2">
+                    <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
+                      Description
+                    </Label>
                     <Input
-                      type="number"
-                      value={formData.min_selling_price}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          min_selling_price: e.target.value,
-                        })
-                      }
-                      required
+                      value={formData.description}
+                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                      className="bg-muted/30 border-muted h-12"
+                      placeholder="Optional description"
                     />
                   </div>
 
-                  <div>
-                    <Label>Selling Price</Label>
-                    <Input
-                      type="number"
-                      value={formData.selling_price}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          selling_price: e.target.value,
-                        })
-                      }
-                      required
-                    />
-                  </div>
-                </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">Category</Label>
+                   <Select
+  value={formData.category_id}
+  onValueChange={(v) => {
+    const sel = categories.find((c) => c.id === v)
+    const isSrv = sel?.name?.toLowerCase() === "services"
 
-                {/* VARIANTS */}
-                {!isServiceSelected && (
+    setFormData({
+      ...formData,
+      category_id: v,
+      stock: isSrv ? "0" : formData.stock,
+      min_stock: isSrv ? "0" : formData.min_stock,
+    })
+  }}
+>
+  <SelectTrigger className="bg-black text-white border border-border h-12">
+    <SelectValue placeholder="Select category" />
+  </SelectTrigger>
+
+  <SelectContent className="bg-black text-white border border-border">
+    {categories.map((c) => (
+      <SelectItem
+        key={c.id}
+        value={c.id}
+        className="focus:bg-white/10"
+      >
+        {c.name}
+      </SelectItem>
+    ))}
+  </SelectContent>
+</Select>
+
+                  </div>
+
+                  {/* IMAGES */}
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <Label className="text-lg">Variants (Optional)</Label>
-                      <span className="text-xs text-muted-foreground">Leave V-SKU empty to skip variants</span>
+                      <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
+                        Product Images
+                      </Label>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-muted">
+                        {formData.images.length}/5
+                      </span>
                     </div>
 
-                    {variants.map((v, index) => (
-                      <div key={index} className="grid grid-cols-6 gap-2 border p-3 rounded-md">
+                    <div className="grid grid-cols-2 gap-3">
+                      <Label className="flex flex-col items-center justify-center h-28 rounded-2xl border-2 border-dashed border-muted hover:border-primary/50 transition-all bg-muted/10 cursor-pointer active:scale-95">
+                        <Camera className="w-6 h-6 mb-2 text-primary" />
+                        <span className="text-xs font-bold">Snap Photo</span>
                         <Input
-                          placeholder="V-SKU"
-                          value={v.v_sku}
-                          onChange={(e) => {
-                            const copy = [...variants]
-                            copy[index].v_sku = e.target.value
-                            setVariants(copy)
-                          }}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          onChange={(e) => handleImageUpload(e.target.files[0])}
+                          disabled={uploading || formData.images.length >= 5}
                         />
-
+                      </Label>
+                      <Label className="flex flex-col items-center justify-center h-28 rounded-2xl border-2 border-dashed border-muted hover:border-primary/50 transition-all bg-muted/10 cursor-pointer active:scale-95">
+                        <ImageIcon className="w-6 h-6 mb-2 text-primary" />
+                        <span className="text-xs font-bold">From Gallery</span>
                         <Input
-                          placeholder="Name"
-                          value={v.variant_name}
-                          onChange={(e) => {
-                            const copy = [...variants]
-                            copy[index].variant_name = e.target.value
-                            setVariants(copy)
-                          }}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => handleImageUpload(e.target.files[0])}
+                          disabled={uploading || formData.images.length >= 5}
                         />
+                      </Label>
+                    </div>
 
-                        <Input
-                          placeholder="Color"
-                          value={v.color}
-                          onChange={(e) => {
-                            const copy = [...variants]
-                            copy[index].color = e.target.value
-                            setVariants(copy)
-                          }}
-                        />
-
-                        <Input
-                          placeholder="Size"
-                          value={v.size}
-                          onChange={(e) => {
-                            const copy = [...variants]
-                            copy[index].size = e.target.value
-                            setVariants(copy)
-                          }}
-                        />
-
-                        <Input
-                          type="number"
-                          placeholder="Stock"
-                          value={v.stock}
-                          onChange={(e) => {
-                            const copy = [...variants]
-                            copy[index].stock = Number(e.target.value)
-                            setVariants(copy)
-                          }}
-                        />
-
-                        <div className="flex flex-col gap-1">
-                          <Input
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => handleVariantImageUpload(e.target.files[0], index)}
+                    <div className="flex gap-3 overflow-x-auto py-2 scrollbar-hide">
+                      {imagePreviews.map((img, idx) => (
+                        <div key={idx} className="relative flex-shrink-0">
+                          <img
+                            src={img || "/placeholder.svg"}
+                            className={`w-24 h-24 object-cover rounded-2xl border-2 ${idx === 0 ? "border-primary ring-4 ring-primary/10" : "border-muted"}`}
                           />
-
-                          {v.image_url && (
-                            <img
-                              src={v.image_url || "/placeholder.svg"}
-                              alt="Variant"
-                              className="w-12 h-12 object-cover rounded border"
-                            />
+                          <button
+                            type="button"
+                            onClick={() => removeImage(idx)}
+                            className="absolute -top-2 -right-2 bg-destructive text-white rounded-full p-1.5 shadow-xl active:scale-90 transition-transform"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                          {idx === 0 && (
+                            <span className="absolute bottom-2 left-2 bg-primary text-white text-[8px] px-1.5 py-0.5 font-black rounded-md tracking-tighter">
+                              MAIN
+                            </span>
                           )}
                         </div>
-
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          onClick={() => setVariants(variants.filter((_, i) => i !== index))}
-                          disabled={variants.length === 1}
-                        >
-                          Remove
-                        </Button>
-                      </div>
-                    ))}
-
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() =>
-                        setVariants([
-                          ...variants,
-                          {
-                            v_sku: "",
-                            variant_name: "",
-                            color: "",
-                            size: "",
-                            stock: 0,
-                            image_url: "",
-                          },
-                        ])
-                      }
-                    >
-                      <Plus className="w-4 h-4 mr-2" />
-                      Add Variant
-                    </Button>
+                      ))}
+                    </div>
                   </div>
-                )}
 
-                {/* STOCK */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Stock</Label>
-                    <Input
-                      type="number"
-                      value={formData.stock}
-                      disabled={isServiceSelected}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          stock: e.target.value,
-                        })
-                      }
-                      required={!isServiceSelected}
-                    />
-
-                    {isServiceSelected && (
-                      <p className="text-xs text-muted-foreground mt-1">Services do not use inventory stock</p>
+                  {/* PRICING & STOCK */}
+                  <div className="grid grid-cols-2 gap-4 pt-2">
+                    {role === "admin" && (
+                      <div className="space-y-2">
+                        <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
+                          Cost Price
+                        </Label>
+                        <Input
+                          type="number"
+                          value={formData.cost_price}
+                          onChange={(e) => setFormData({ ...formData, cost_price: e.target.value })}
+                          className="bg-muted/30 border-muted h-12"
+                        />
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
+                        Min Selling Price
+                      </Label>
+                      <Input
+                        type="number"
+                        value={formData.min_selling_price}
+                        onChange={(e) => setFormData({ ...formData, min_selling_price: e.target.value })}
+                        className="bg-muted/30 border-muted h-12"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
+                        Selling Price
+                      </Label>
+                      <Input
+                        type="number"
+                        value={formData.selling_price}
+                        onChange={(e) => setFormData({ ...formData, selling_price: e.target.value })}
+                        className="bg-muted/30 border-muted h-12 font-bold text-primary"
+                      />
+                    </div>
+                    {!isServiceSelected && (
+                      <>
+                        <div className="space-y-2">
+                          <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
+                            Base Stock
+                          </Label>
+                          <Input
+                            type="number"
+                            value={formData.stock}
+                            onChange={(e) => setFormData({ ...formData, stock: e.target.value })}
+                            className="bg-muted/30 border-muted h-12"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
+                            Low Stock Alert
+                          </Label>
+                          <Input
+                            type="number"
+                            value={formData.min_stock}
+                            onChange={(e) => setFormData({ ...formData, min_stock: e.target.value })}
+                            className="bg-muted/30 border-muted h-12"
+                          />
+                        </div>
+                      </>
                     )}
                   </div>
 
-                  <div>
-                    <Label>Minimum Stock Alert</Label>
-                    <Input
-                      type="number"
-                      value={formData.min_stock}
-                      disabled={isServiceSelected}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          min_stock: e.target.value,
-                        })
-                      }
-                      required={!isServiceSelected}
-                    />
-                  </div>
+                  {/* VARIANTS SECTION */}
+                  {!isServiceSelected && (
+                    <div className="space-y-4 pt-6 border-t">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm font-black uppercase tracking-widest text-primary">Variants</Label>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          className="rounded-full h-8"
+                          onClick={() =>
+                            setVariants([
+                              ...variants,
+                              { v_sku: "", variant_name: "", color: "", size: "", stock: 0, image_url: "" },
+                            ])
+                          }
+                        >
+                          <Plus className="w-3 h-3 mr-1" /> Add Variant
+                        </Button>
+                      </div>
+
+                      <div className="space-y-4">
+                        {variants.map((v, idx) => (
+                          <Card key={idx} className="relative overflow-hidden border-muted/50 shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => setVariants(variants.filter((_, i) => i !== idx))}
+                              disabled={variants.length === 1}
+                              className="absolute top-3 right-3 p-1.5 text-muted-foreground hover:text-destructive bg-muted/50 rounded-full"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+
+                            <CardContent className="p-4 space-y-4">
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1.5">
+                                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">V-SKU</Label>
+                                  <Input
+                                    placeholder="e.g. SKU-RED-M"
+                                    value={v.v_sku}
+                                    onChange={(e) => {
+                                      const copy = [...variants]
+                                      copy[idx].v_sku = e.target.value
+                                      setVariants(copy)
+                                    }}
+                                    className="h-10 text-xs"
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">Name</Label>
+                                  <Input
+                                    placeholder="Variant name"
+                                    value={v.variant_name}
+                                    onChange={(e) => {
+                                      const copy = [...variants]
+                                      copy[idx].variant_name = e.target.value
+                                      setVariants(copy)
+                                    }}
+                                    className="h-10 text-xs"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-3">
+                                <div className="space-y-1.5">
+                                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">Color</Label>
+                                  <Input
+                                    placeholder="Color"
+                                    value={v.color}
+                                    onChange={(e) => {
+                                      const copy = [...variants]
+                                      copy[idx].color = e.target.value
+                                      setVariants(copy)
+                                    }}
+                                    className="h-10 text-xs"
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">Size</Label>
+                                  <Input
+                                    placeholder="Size"
+                                    value={v.size}
+                                    onChange={(e) => {
+                                      const copy = [...variants]
+                                      copy[idx].size = e.target.value
+                                      setVariants(copy)
+                                    }}
+                                    className="h-10 text-xs"
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">Stock</Label>
+                                  <Input
+                                    type="number"
+                                    value={v.stock}
+                                    onChange={(e) => {
+                                      const copy = [...variants]
+                                      copy[idx].stock = e.target.value
+                                      setVariants(copy)
+                                    }}
+                                    className="h-10 text-xs"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-4 pt-2">
+                                <Label className="flex-1 flex items-center justify-center gap-2 h-10 border-2 border-dashed rounded-xl cursor-pointer hover:bg-muted/20 text-xs font-bold">
+                                  <Camera className="w-4 h-4" />
+                                  {v.image_url ? "Change Image" : "Add Image"}
+                                  <Input
+                                    type="file"
+                                    accept="image/*"
+                                    capture="environment"
+                                    className="hidden"
+                                    onChange={(e) => handleVariantImageUpload(e.target.files[0], idx)}
+                                  />
+                                </Label>
+                                {v.image_url && (
+                                  <img
+                                    src={v.image_url || "/placeholder.svg"}
+                                    className="w-10 h-10 rounded-lg object-cover ring-2 ring-primary/20"
+                                  />
+                                )}
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                <Button type="submit" className="w-full" disabled={uploading}>
-                  {editingProduct ? "Update Product" : "Create Product"}
-                </Button>
+                {/* STICKY ACTION BUTTONS FOR MOBILE */}
+                <div
+                  className={`${isMobile ? "fixed bottom-0 left-0 right-0 p-4 bg-background border-t grid grid-cols-2 gap-3 z-50" : "p-4 flex justify-end gap-3 border-t"}`}
+                >
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-14 sm:h-10 rounded-2xl font-bold bg-transparent"
+                    onClick={() => {
+                      setOpen(false)
+                      resetForm()
+                    }}
+                  >
+                    Cancel
+                  </Button>
+<Button
+  type="submit"
+  disabled={savingProduct || uploading}
+  className="h-14 sm:h-10 rounded-2xl font-bold shadow-lg flex items-center justify-center gap-2"
+>
+  {savingProduct && (
+    <span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+  )}
+  {savingProduct
+    ? "Saving..."
+    : editingProduct
+    ? "Update Product"
+    : "Create Product"}
+</Button>
+
+
+                </div>
               </form>
             </DialogContent>
           </Dialog>
+          </div>
         )}
       </div>
 
-      {/* FILTER CONTROLS */}
       <div className="flex flex-col sm:flex-row gap-4">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
-            placeholder="Search by name, SKU, code, category..."
+            placeholder="Search products..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
+            className="pl-10 h-11"
           />
         </div>
+        <div className="flex gap-2">
+         <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+  <SelectTrigger className="flex-1 sm:w-48 h-11 bg-black text-white border border-border">
+    <SelectValue placeholder="Category" />
+  </SelectTrigger>
 
-        <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-          <SelectTrigger className="w-full sm:w-48 bg-black text-white border border-gray-700 focus:ring-0">
-            <SelectValue placeholder="All Categories" className="text-gray-400" />
-          </SelectTrigger>
+  <SelectContent className="bg-black text-white border border-border">
+    <SelectItem value="all" className="focus:bg-white/10">
+      All categories
+    </SelectItem>
 
-          <SelectContent className="bg-black text-white border border-gray-700">
-            <SelectItem value="all" className="text-white hover:bg-gray-800 focus:bg-gray-800">
-              All Categories
-            </SelectItem>
+    {categories.map((c) => (
+      <SelectItem
+        key={c.id}
+        value={c.id}
+        className="focus:bg-white/10"
+      >
+        {c.name}
+      </SelectItem>
+    ))}
+  </SelectContent>
+</Select>
 
-            {categories.map((c) => (
-              <SelectItem key={c.id} value={c.id} className="text-white hover:bg-gray-800 focus:bg-gray-800">
-                {c.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+         <Select value={priceSort} onValueChange={setPriceSort}>
+  <SelectTrigger className="flex-1 sm:w-48 h-11 bg-black text-white border border-border">
+    <SelectValue placeholder="Sort" />
+  </SelectTrigger>
 
-        <Select value={priceSort} onValueChange={setPriceSort}>
-          <SelectTrigger className="w-full sm:w-48 bg-black text-white border border-gray-700 focus:ring-0">
-            <SelectValue placeholder="Sort by Price" />
-          </SelectTrigger>
+  <SelectContent className="bg-black text-white border border-border">
+    <SelectItem value="none" className="focus:bg-white/10">
+      Default Sort
+    </SelectItem>
+    <SelectItem value="low-high" className="focus:bg-white/10">
+      Price: Low to High
+    </SelectItem>
+    <SelectItem value="high-low" className="focus:bg-white/10">
+      Price: High to Low
+    </SelectItem>
+  </SelectContent>
+</Select>
 
-          <SelectContent className="bg-black text-white border border-gray-700">
-            <SelectItem value="none" className="text-white hover:bg-gray-800 focus:bg-gray-800">
-              Default Sort
-            </SelectItem>
-
-            <SelectItem value="low-high" className="text-white hover:bg-gray-800 focus:bg-gray-800">
-              Price: Low to High
-            </SelectItem>
-
-            <SelectItem value="high-low" className="text-white hover:bg-gray-800 focus:bg-gray-800">
-              Price: High to Low
-            </SelectItem>
-          </SelectContent>
-        </Select>
+        </div>
       </div>
 
-      {/* TABLE */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Product List ({filteredProducts.length})</CardTitle>
-        </CardHeader>
-
-        <CardContent className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="border-b text-sm text-muted-foreground">
-                <th className="p-2 text-left">#</th>
-                <th className="p-2 text-left">Code</th>
-                <th className="p-2 text-left">Name</th>
-                <th className="p-2 text-left">Image</th>
-
-                <th className="p-2 text-left">Category</th>
-                <th className="p-2 text-left">SKU</th>
-                <th className="p-2 text-left">QR</th>
-
-                {role === "admin" && <th className="p-2 text-left">Cost</th>}
-                {role === "admin" && <th className="p-2 text-left">Min Selling</th>}
-                <th className="p-2 text-left">Sell</th>
-                <th className="p-2 text-left">Stock</th>
-                <th className="p-2 text-left">Variants</th>
-
-                {role === "admin" && <th className="p-2 text-left">Min Stock</th>}
-                <th className="p-2 text-left">Status</th>
-                {role === "admin" && <th className="p-2 text-right">Actions</th>}
-              </tr>
-            </thead>
-
-            <tbody>
-              {filteredProducts.map((p, i) => (
-                <tr key={p.id} className="border-b hover:bg-muted/40">
-                  <td className="p-2">{i + 1}</td>
-                  <td className="p-2 font-mono text-sm">{p.product_code}</td>
-                  <td className="p-2 font-medium">
-                    {p.name}
-                    {p.variants?.length > 0 && (
-                      <span className="ml-2 text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700">
-                        {p.variants.length} variants
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-2">
-                    {Array.isArray(p.images) && p.images.length > 0 ? (
+      {/* MOBILE LIST VIEW */}
+      {isMobile ? (
+        <div className="space-y-4">
+          {filteredProducts.map((p) => (
+            <Card key={p.id} className="overflow-hidden border-none shadow-sm bg-muted/20">
+              <div className="flex gap-4 p-4">
+                <div className="relative">
+                  <img
+                    src={p.images?.[0] || "/placeholder.svg"}
+                    className="w-20 h-20 object-cover rounded-2xl shadow-sm bg-background"
+                    alt={p.name}
+                  />
+                  <div className="absolute -top-1 -right-1">
+                    {p.qr_code_url && (!p.variants || p.variants.length === 0) && (
                       <Dialog>
                         <DialogTrigger asChild>
-                          <Button size="sm" variant="outline">
-                            View Images
+                          <Button size="icon" variant="secondary" className="w-7 h-7 rounded-full shadow-md scale-90">
+                            <QrCode className="w-3.5 h-3.5" />
                           </Button>
                         </DialogTrigger>
 
-                        <DialogContent className="max-w-2xl">
+                        <DialogContent className="max-w-[300px] rounded-3xl">
                           <DialogHeader>
-                            <DialogTitle>{p.name} – Images</DialogTitle>
+                            <DialogTitle className="text-center font-bold">{p.name} QR</DialogTitle>
                           </DialogHeader>
-
-                          <div className="flex gap-4 overflow-x-auto pb-2">
-                            {p.images.map((img, idx) => (
-                              <img
-                                key={idx}
-                                src={img || "/placeholder.svg"}
-                                alt={`Product ${idx}`}
-                                className="h-40 w-auto rounded-lg border object-cover flex-shrink-0"
-                              />
-                            ))}
+                          <div className="flex flex-col items-center gap-4 p-4">
+                            <div className="p-4 bg-white rounded-2xl shadow-inner">
+                              <img src={p.qr_code_url} className="w-40 h-40" />
+                            </div>
+                            <span className="font-mono text-xs font-bold text-muted-foreground tracking-widest">
+                              {p.sku}
+                            </span>
                           </div>
                         </DialogContent>
                       </Dialog>
-                    ) : (
-                      <span className="text-muted-foreground text-sm">No images</span>
                     )}
-                  </td>
 
-                  <td className="p-2">{p.category_name}</td>
-                  <td className="p-2 font-mono text-sm">{p.sku}</td>
-                  <td className="p-2">
-                    {p.qr_code_url ? (
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button size="sm" variant="outline">
-                            <QrCode className="w-4 h-4 mr-1" />
-                            View
-                          </Button>
-                        </DialogTrigger>
+                  </div>
+                </div>
 
-                        <DialogContent className="max-w-sm">
-                          <DialogHeader>
-                            <DialogTitle>{p.name} – QR Code</DialogTitle>
-                          </DialogHeader>
+                <div className="flex-1 flex flex-col justify-between py-0.5">
+                  <div>
+                    <h3 className="font-bold text-base leading-tight line-clamp-1">{p.name}</h3>
+                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mt-1">
+                      {p.category_name} • {p.sku}
+                    </p>
+                  </div>
 
-                          <div className="flex flex-col items-center gap-3">
-                            <img src={p.qr_code_url || "/placeholder.svg"} alt="QR Code" />
-                            <p className="font-mono text-sm">{p.sku}</p>
-
-                            <Button onClick={() => window.open(p.qr_code_url, "_blank")}>Download QR</Button>
-                          </div>
-                        </DialogContent>
-                      </Dialog>
-                    ) : (
-                      <span className="text-muted-foreground text-sm">N/A</span>
-                    )}
-                  </td>
-
-                  {role === "admin" && <td className="p-2">₹{p.cost_price}</td>}
-
-                  {role === "admin" && <td className="p-2">₹{p.min_selling_price}</td>}
-
-                  <td className="p-2 font-semibold">₹{p.selling_price}</td>
-
-                  <td className={`p-2 font-semibold ${p.stock <= p.min_stock ? "text-red-600" : "text-green-600"}`}>
-                    {p.stock}
-                  </td>
-                  <td className="p-2">
-                    {Array.isArray(p.variants) && p.variants.length > 0 ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          setSelectedProduct(p)
-                          setVariantOpen(true)
-                        }}
+                  <div className="flex items-center justify-between mt-auto">
+                    <span className="text-lg font-black text-primary">₹{p.selling_price}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${p.stock <= p.min_stock
+                          ? "bg-destructive/10 text-destructive"
+                          : "bg-green-500/10 text-green-500"
+                          }`}
                       >
-                        View ({p.variants.length})
-                      </Button>
-                    ) : (
-                      <span className="text-muted-foreground text-sm">—</span>
-                    )}
-                  </td>
+                        {p.stock} in stock
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-                  {role === "admin" && <td className="p-2 text-muted-foreground">{p.min_stock}</td>}
+              <div className="flex items-center border-t border-muted p-2 gap-2 bg-muted/10">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="flex-1 h-10 rounded-xl font-bold text-xs"
+                  onClick={() => handleEdit(p)}
+                >
+                  <Edit className="w-3.5 h-3.5 mr-2" /> Edit
+                </Button>
 
-                  <td className="p-2">
-                    <span
-                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                        p.stock <= p.min_stock ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"
-                      }`}
-                    >
-                      {p.stock <= p.min_stock ? "Low Stock" : "In Stock"}
-                    </span>
-                  </td>
+                {p.variants?.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="flex-1 h-10 rounded-xl font-bold text-xs"
+                    onClick={() => {
+                      setSelectedProduct(p)
+                      setVariantOpen(true)
+                    }}
+                  >
+                    {p.variants.length} Variants
+                  </Button>
+                )}
 
-                  {role === "admin" && (
-                    <td className="p-2 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={() => handleEdit(p)}>
-                          <Edit className="w-4 h-4 mr-1" /> Edit
-                        </Button>
-                        <Button size="sm" variant="destructive" onClick={() => handleDelete(p.id)}>
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {filteredProducts.length === 0 && (
-            <div className="py-12 text-center text-muted-foreground">No products found matching your filters</div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Dialog open={variantOpen} onOpenChange={setVariantOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Variants – {selectedProduct?.name}</DialogTitle>
-          </DialogHeader>
-
-          {!selectedProduct?.variants?.length ? (
-            <p className="text-muted-foreground">No variants found</p>
-          ) : (
+                {role === "admin" && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-10 h-10 rounded-xl text-destructive hover:bg-destructive/10"
+                    onClick={() => handleDelete(p.id)}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        // DESKTOP TABLE VIEW
+        <Card className="border-muted shadow-lg overflow-hidden">
+          <CardHeader className="bg-muted/30 border-b">
+            <CardTitle className="flex items-center gap-2">
+              <span className="w-2 h-6 bg-primary rounded-full" />
+              Product Inventory ({filteredProducts.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0 overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
-                <tr className="border-b text-sm text-muted-foreground">
-                  <th className="p-2 text-left">#</th>
-                  <th className="p-2 text-left">V-SKU</th>
-                  <th className="p-2 text-left">Name</th>
-                  <th className="p-2 text-left">Color</th>
-                  <th className="p-2 text-left">Size</th>
-                  <th className="p-2 text-left">Stock</th>
-                  <th className="p-2 text-left">Image</th>
-                  <th className="p-2 text-left">QR</th>
+                <tr className="bg-muted/50 text-xs font-bold text-muted-foreground uppercase tracking-wider border-b">
+                  <th className="p-4 text-left">#</th>
+                  <th className="p-4 text-left">Name / Info</th>
+                  <th className="p-4 text-left">Category</th>
+                  <th className="p-4 text-left">Image</th>
+                  <th className="p-4 text-left">SKU</th>
+                  <th className="p-4 text-left text-center">QR</th>
+                  {role === "admin" && <th className="p-4 text-left">Cost</th>}
+                  <th className="p-4 text-left">Sell Price</th>
+                  <th className="p-4 text-left">Stock</th>
+                  <th className="p-4 text-left">Variants</th>
+                  {role === "admin" && <th className="p-4 text-center">Actions</th>}
                 </tr>
               </thead>
-
-              <tbody>
-                {selectedProduct.variants.map((v, i) => (
-                  <tr key={v.v_sku} className="border-b">
-                    <td className="p-2">{i + 1}</td>
-                    <td className="p-2 font-mono text-sm">{v.v_sku}</td>
-                    <td className="p-2">{v.variant_name || "-"}</td>
-                    <td className="p-2">{v.color || "-"}</td>
-                    <td className="p-2">{v.size || "-"}</td>
-
-                    <td className={`p-2 font-semibold ${v.stock <= 0 ? "text-red-600" : "text-green-600"}`}>
-                      {v.stock}
+              <tbody className="divide-y divide-muted/30">
+                {filteredProducts.map((p, i) => (
+                  <tr key={p.id} className="hover:bg-muted/20 transition-colors group">
+                    <td className="p-4 text-sm text-muted-foreground">{i + 1}</td>
+                    <td className="p-4">
+                      <div className="flex flex-col">
+                        <span className="font-bold text-sm">{p.name}</span>
+                        <span className="text-[10px] font-mono text-muted-foreground mt-1">{p.product_code}</span>
+                      </div>
                     </td>
-
-                    <td className="p-2 flex gap-2 items-center">
-                      {v.image_url ? (
-                        <img
-                          src={v.image_url || "/placeholder.svg"}
-                          className="w-12 h-12 object-cover rounded border"
-                        />
-                      ) : (
-                        <span className="text-muted-foreground text-sm">N/A</span>
-                      )}
+                    <td className="p-4">
+                      <span className="text-xs font-semibold px-2 py-1 bg-muted rounded-md">{p.category_name}</span>
                     </td>
-
-                    <td className="p-2">
-                      {v.qr_code_url ? (
+                    <td className="p-4">
+                      {p.images?.[0] ? (
                         <Dialog>
                           <DialogTrigger asChild>
-                            <Button size="sm" variant="outline">
-                              <QrCode className="w-4 h-4 mr-1" />
-                              View
-                            </Button>
+                            <img
+                              src={p.images[0] || "/placeholder.svg"}
+                              className="w-10 h-10 object-cover rounded-lg border hover:scale-110 transition-transform cursor-zoom-in shadow-sm"
+                            />
                           </DialogTrigger>
-
-                          <DialogContent className="max-w-sm">
-                            <DialogHeader>
-                              <DialogTitle>Variant QR – {v.v_sku}</DialogTitle>
-                            </DialogHeader>
-
-                            <div className="flex flex-col items-center gap-3">
-                              <img src={v.qr_code_url || "/placeholder.svg"} alt="Variant QR" />
-                              <p className="font-mono text-sm">{v.v_sku}</p>
-
-                              <Button onClick={() => window.open(v.qr_code_url, "_blank")}>Download QR</Button>
+                          <DialogContent className="max-w-2xl">
+                            <div className="flex gap-4 overflow-x-auto p-2">
+                              {p.images.map((img, idx) => (
+                                <img
+                                  key={idx}
+                                  src={img || "/placeholder.svg"}
+                                  className="h-64 w-auto rounded-xl border-2 object-cover"
+                                />
+                              ))}
                             </div>
                           </DialogContent>
                         </Dialog>
                       ) : (
-                        <span className="text-muted-foreground text-sm">N/A</span>
+                        <span className="text-xs text-muted-foreground italic">None</span>
                       )}
                     </td>
+                    <td className="p-4 font-mono text-xs">{p.sku}</td>
+                   <td className="p-4 text-center">
+  {p.qr_code_url && (!p.variants || p.variants.length === 0) ? (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button
+          size="icon"
+          variant="outline"
+          className="h-8 w-8 hover:bg-primary hover:text-primary-foreground transition-all bg-transparent"
+        >
+          <QrCode className="w-4 h-4" />
+        </Button>
+      </DialogTrigger>
+
+      <DialogContent className="max-w-sm">
+        <div className="flex flex-col items-center gap-4 py-4">
+          <img
+            src={p.qr_code_url}
+            alt="QR"
+            className="w-48 h-48 border-2 p-2 bg-white rounded-lg"
+          />
+          <p className="font-mono text-xs font-bold">{p.sku}</p>
+          <Button
+            className="w-full"
+            onClick={() => window.open(p.qr_code_url, "_blank")}
+          >
+            Download QR
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  ) : (
+    <span className="text-xs text-muted-foreground">-</span>
+  )}
+</td>
+
+
+                    {role === "admin" && <td className="p-4 text-sm font-medium">₹{p.cost_price}</td>}
+                    <td className="p-4 text-sm font-bold text-primary">₹{p.selling_price}</td>
+                    <td className="p-4">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`text-sm font-bold ${p.stock <= p.min_stock ? "text-destructive" : "text-green-500"}`}
+                        >
+                          {p.stock}
+                        </span>
+                        {p.stock <= p.min_stock && (
+                          <span className="h-2 w-2 rounded-full bg-destructive animate-pulse" />
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-4">
+                      {p.variants?.length > 0 ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-xs font-bold hover:bg-primary/10 hover:text-primary"
+                          onClick={() => {
+                            setSelectedProduct(p)
+                            setVariantOpen(true)
+                          }}
+                        >
+                          {p.variants.length} Vars
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
+                    </td>
+                    {role === "admin" && (
+                      <td className="p-4">
+                        <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-muted-foreground hover:text-primary"
+                            onClick={() => handleEdit(p)}
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={() => handleDelete(p.id)}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
-          )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* VARIANT DRAWER/DIALOG */}
+      <Dialog open={variantOpen} onOpenChange={setVariantOpen}>
+        <DialogContent
+          className={`${isMobile ? "w-full h-[100dvh] max-w-none m-0 rounded-none overflow-y-auto" : "max-w-3xl"}`}
+        >
+          <DialogHeader className={isMobile ? "sticky top-0 bg-background z-10 pb-4 border-b" : ""}>
+            <DialogTitle className="font-black text-xl">Variants: {selectedProduct?.name}</DialogTitle>
+          </DialogHeader>
+
+          <div className={`space-y-4 ${isMobile ? "py-4 pb-12" : "py-4"}`}>
+            {selectedProduct?.variants?.map((v, i) => (
+              <Card key={i} className="p-4 border-none shadow-sm bg-muted/20">
+                <div className="flex gap-4">
+                  <div className="relative">
+                    <img src={v.image_url || "/placeholder.svg"} className="w-16 h-16 object-cover rounded-xl" />
+                    <div className="absolute -top-1 -right-1">
+                      {v.qr_code_url && (
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button size="icon" variant="secondary" className="w-6 h-6 rounded-full shadow-md scale-90">
+                              <QrCode className="w-3 h-3" />
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent className="max-w-[280px] rounded-3xl">
+                            <DialogHeader>
+                              <DialogTitle className="text-center text-sm font-bold">Variant QR: {v.v_sku}</DialogTitle>
+                            </DialogHeader>
+                            <div className="flex flex-col items-center gap-4 p-4">
+                              <div className="p-3 bg-white rounded-2xl shadow-inner">
+                                <img src={v.qr_code_url || "/placeholder.svg"} className="w-32 h-32" />
+                              </div>
+                              <span className="font-mono text-[10px] font-bold text-muted-foreground uppercase">
+                                {v.v_sku}
+                              </span>
+                            </div>
+                          </DialogContent>
+                        </Dialog>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex-1 flex flex-col justify-center">
+                    <h4 className="font-bold text-sm">
+                      {v.variant_name || "Standard"} {v.color ? `(${v.color})` : ""} {v.size ? `• ${v.size}` : ""}
+                    </h4>
+                    <p className="text-[10px] font-bold text-muted-foreground uppercase mt-1">SKU: {v.v_sku}</p>
+                    <div className="mt-2">
+                      <span
+                        className={`text-[10px] font-black px-2 py-0.5 rounded-full ${v.stock <= 0 ? "bg-destructive/10 text-destructive" : "bg-green-500/10 text-green-500"
+                          }`}
+                      >
+                        {v.stock} in stock
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
